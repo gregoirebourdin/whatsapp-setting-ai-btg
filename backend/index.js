@@ -41,7 +41,68 @@ async function logEvent(eventType, waId, jobId, payload, error) {
 // ============================================
 // CHATBASE API
 // ============================================
-async function queryChatbase(message, conversationId) {
+
+/**
+ * Search for an existing conversation in Chatbase for this contact
+ * Returns the most recent conversationId if found, null otherwise
+ */
+async function findExistingChatbaseConversation(contactId) {
+  const chatbotId = await getConfig('chatbase_chatbot_id');
+  const apiKey = await getConfig('chatbase_api_key');
+  
+  if (!chatbotId || !apiKey) {
+    return null;
+  }
+  
+  try {
+    console.log(`[Worker] Searching for existing Chatbase conversation for contact: ${contactId}`);
+    
+    // Get all conversations from Chatbase
+    const response = await fetch(
+      `https://www.chatbase.co/api/v1/get-conversations?chatbotId=${chatbotId}&size=100`,
+      {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+        },
+      }
+    );
+    
+    if (!response.ok) {
+      console.log(`[Worker] Failed to fetch conversations: ${response.status}`);
+      return null;
+    }
+    
+    const data = await response.json();
+    const conversations = data.data || [];
+    
+    console.log(`[Worker] Found ${conversations.length} total conversations in Chatbase`);
+    
+    // Look for a conversation that matches our contactId pattern
+    // Our conversationIds are formatted as: wa_{waId}_timestamp
+    const matchingConv = conversations.find(conv => {
+      // Check if this conversation ID starts with our waId pattern
+      if (conv.id && conv.id.startsWith(`wa_${contactId}_`)) {
+        return true;
+      }
+      return false;
+    });
+    
+    if (matchingConv) {
+      console.log(`[Worker] Found existing conversation: ${matchingConv.id}`);
+      return matchingConv.id;
+    }
+    
+    console.log(`[Worker] No existing conversation found for contact ${contactId}`);
+    return null;
+    
+  } catch (error) {
+    console.error(`[Worker] Error searching for conversation:`, error.message);
+    return null;
+  }
+}
+
+async function queryChatbase(message, conversationId, contactId) {
   const chatbotId = await getConfig('chatbase_chatbot_id');
   const apiKey = await getConfig('chatbase_api_key');
   
@@ -55,11 +116,17 @@ async function queryChatbase(message, conversationId) {
     stream: false,
   };
   
+  // IMPORTANT: We MUST provide conversationId for the conversation to be saved in Chatbase
   if (conversationId) {
     body.conversationId = conversationId;
   }
   
-  console.log(`[Worker] Calling Chatbase API...`);
+  // Optional: link to a contact in Chatbase
+  if (contactId) {
+    body.contactId = contactId;
+  }
+  
+  console.log(`[Worker] Calling Chatbase API with conversationId: ${conversationId}`);
   
   const response = await fetch('https://www.chatbase.co/api/v1/chat', {
     method: 'POST',
@@ -193,20 +260,37 @@ async function processJob(job) {
     
     // Get existing mapping for this user
     const mapping = await getMapping(waId);
-    const existingConversationId = mapping?.chatbase_conversation_id || null;
+    let conversationId = mapping?.chatbase_conversation_id;
     
-    console.log(`[Worker] Existing conversationId: ${existingConversationId || 'none (new conversation)'}`);
-    
-    // Query Chatbase
-    const chatbaseResponse = await queryChatbase(content, existingConversationId);
-    
-    // Update mapping with new conversationId
-    if (chatbaseResponse.conversationId) {
-      await updateMapping(waId, {
-        chatbase_conversation_id: chatbaseResponse.conversationId,
-      });
-      console.log(`[Worker] Updated mapping with conversationId: ${chatbaseResponse.conversationId}`);
+    // STEP 1: Check our local mapping first
+    if (conversationId) {
+      console.log(`[Worker] Using conversationId from local mapping: ${conversationId}`);
+    } else {
+      // STEP 2: No local mapping - search Chatbase for existing conversation
+      console.log(`[Worker] No local mapping - searching Chatbase for existing conversation...`);
+      conversationId = await findExistingChatbaseConversation(waId);
+      
+      if (conversationId) {
+        // Found existing conversation in Chatbase! Save to local mapping
+        console.log(`[Worker] Found existing Chatbase conversation: ${conversationId}`);
+        await updateMapping(waId, {
+          chatbase_conversation_id: conversationId,
+        });
+      } else {
+        // STEP 3: No existing conversation - create a new one
+        conversationId = `wa_${waId}_${Date.now()}`;
+        console.log(`[Worker] No existing conversation found - creating new: ${conversationId}`);
+        
+        // Save to local mapping for future messages
+        await updateMapping(waId, {
+          chatbase_conversation_id: conversationId,
+        });
+      }
     }
+    
+    // Query Chatbase WITH our conversationId - this ensures the conversation is saved in Chatbase
+    // Also pass waId as contactId so Chatbase can link the conversation to a contact
+    const chatbaseResponse = await queryChatbase(content, conversationId, waId);
     
     // Send response via WhatsApp
     await sendWhatsAppMessage(waId, chatbaseResponse.text);
