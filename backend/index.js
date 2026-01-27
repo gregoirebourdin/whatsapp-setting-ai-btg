@@ -199,7 +199,7 @@ async function updateBrevoContact(phoneNumber) {
   // Format phone number with + prefix for Brevo (E.164 format)
   const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
   
-  console.log(`[Worker] Updating Brevo contact ${formattedPhone} - setting ANSWERED to true`);
+  console.log(`[Worker] Updating Brevo contact ${formattedPhone} - setting CONTACTED to yes`);
   
   try {
     // Use Option 2: identifier as phone number in URL with identifierType=phone_id
@@ -213,7 +213,7 @@ async function updateBrevoContact(phoneNumber) {
         },
         body: JSON.stringify({
           attributes: {
-            ANSWERED: true,
+            CONTACTED: "yes",
           },
         }),
       }

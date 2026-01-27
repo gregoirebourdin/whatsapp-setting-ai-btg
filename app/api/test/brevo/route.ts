@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
         },
         body: JSON.stringify({
           attributes: {
-            ANSWERED: true,
+            CONTACTED: "yes",
           },
         }),
       }
@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
     if (response.status === 204) {
       return NextResponse.json({ 
         success: true, 
-        message: `Contact ${formattedPhone} updated successfully. ANSWERED = true` 
+        message: `Contact ${formattedPhone} updated successfully. CONTACTED = yes` 
       });
     } else if (response.status === 404) {
       return NextResponse.json({ 
