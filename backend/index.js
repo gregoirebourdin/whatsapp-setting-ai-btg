@@ -186,6 +186,57 @@ async function queryChatbase(message, conversationId, contactId) {
 }
 
 // ============================================
+// BREVO API
+// ============================================
+async function updateBrevoContact(phoneNumber) {
+  const apiKey = await getConfig('brevo_api_key');
+  
+  if (!apiKey) {
+    console.log('[Worker] Brevo API key not configured - skipping Brevo update');
+    return;
+  }
+  
+  // Format phone number with + prefix for Brevo (E.164 format)
+  const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
+  
+  console.log(`[Worker] Updating Brevo contact ${formattedPhone} - setting ANSWERED to true`);
+  
+  try {
+    // Use Option 2: identifier as phone number in URL
+    const response = await fetch(
+      `https://api.brevo.com/v3/contacts/${encodeURIComponent(formattedPhone)}`,
+      {
+        method: 'PUT',
+        headers: {
+          'api-key': apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          attributes: {
+            ANSWERED: true,
+          },
+        }),
+      }
+    );
+    
+    if (response.status === 204) {
+      console.log(`[Worker] Brevo contact updated successfully`);
+      return true;
+    } else if (response.status === 404) {
+      console.log(`[Worker] Brevo contact not found for ${formattedPhone}`);
+      return false;
+    } else {
+      const errorData = await response.json().catch(() => ({}));
+      console.error(`[Worker] Brevo API error ${response.status}:`, errorData);
+      return false;
+    }
+  } catch (error) {
+    console.error(`[Worker] Brevo update failed:`, error.message);
+    return false;
+  }
+}
+
+// ============================================
 // WHATSAPP API
 // ============================================
 async function sendWhatsAppMessage(to, message) {
@@ -327,14 +378,19 @@ async function processJob(job) {
       console.log(`[Worker] Using existing Chatbase contactId: ${chatbaseContactId}`);
     }
     
-    // STEP 2: Use conversationId if we have one, or let Chatbase create a new conversation
+    // STEP 2: Use conversationId if we have one, or create a new conversation
     // By passing contactId, Chatbase will link this conversation to the contact
     // and we can see all conversations for this contact in Chatbase dashboard
+    const isFirstMessage = !conversationId;
+    
     if (!conversationId) {
       // Generate a unique conversationId - Chatbase requires this to save the conversation
       conversationId = `wa_${waId}_${Date.now()}`;
       console.log(`[Worker] Generated new conversationId: ${conversationId}`);
       await updateMapping(waId, { chatbase_conversation_id: conversationId });
+      
+      // STEP 2.5: First message - Update Brevo contact to mark as ANSWERED
+      await updateBrevoContact(waId);
     } else {
       console.log(`[Worker] Using existing conversationId: ${conversationId}`);
     }
