@@ -199,7 +199,7 @@ async function updateBrevoContact(phoneNumber) {
   // Format phone number with + prefix for Brevo (E.164 format)
   const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
   
-  console.log(`[Worker] Updating Brevo contact ${formattedPhone} - setting CONTACTED to yes`);
+  console.log(`[Worker] Updating Brevo contact ${formattedPhone} - setting ANSWERED to yes`);
   
   try {
     // Use Option 2: identifier as phone number in URL with identifierType=phone_id
@@ -213,7 +213,7 @@ async function updateBrevoContact(phoneNumber) {
         },
         body: JSON.stringify({
           attributes: {
-            CONTACTED: "yes",
+            ANSWERED: "yes",
           },
         }),
       }
@@ -389,7 +389,7 @@ async function processJob(job) {
       console.log(`[Worker] Generated new conversationId: ${conversationId}`);
       await updateMapping(waId, { chatbase_conversation_id: conversationId });
       
-      // STEP 2.5: First message - Update Brevo contact to mark as CONTACTED
+      // STEP 2.5: First message - Update Brevo contact to mark as ANSWERED
       await updateBrevoContact(waId);
     } else {
       console.log(`[Worker] Using existing conversationId: ${conversationId}`);
