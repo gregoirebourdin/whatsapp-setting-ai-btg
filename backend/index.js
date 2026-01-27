@@ -389,7 +389,7 @@ async function processJob(job) {
       console.log(`[Worker] Generated new conversationId: ${conversationId}`);
       await updateMapping(waId, { chatbase_conversation_id: conversationId });
       
-      // STEP 2.5: First message - Update Brevo contact to mark as ANSWERED
+      // STEP 2.5: First message - Update Brevo contact to mark as CONTACTED
       await updateBrevoContact(waId);
     } else {
       console.log(`[Worker] Using existing conversationId: ${conversationId}`);

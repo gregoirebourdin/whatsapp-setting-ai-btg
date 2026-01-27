@@ -40,7 +40,7 @@ export default function TestBrevoPage() {
         <CardHeader>
           <CardTitle>Test Brevo API</CardTitle>
           <CardDescription>
-            Test the Brevo contact update (ANSWERED = true)
+            Test the Brevo contact update (CONTACTED = true)
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
