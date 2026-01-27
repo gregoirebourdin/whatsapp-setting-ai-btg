@@ -15,10 +15,12 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   AlertCircle,
+  Ban,
   ChevronLeft,
   Loader2,
   MessageSquare,
   RefreshCw,
+  ShieldCheck,
   User,
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -196,10 +198,37 @@ function ConversationDetail({
   conversationId: string;
   onBack: () => void;
 }) {
+  const [isBlocking, setIsBlocking] = useState(false);
+  
   const { data, error, isLoading } = useSWR<ConversationDetailResponse>(
     `/api/chatbase/conversations/${conversationId}`,
     fetcher
   );
+  
+  // Extract waId from conversation ID (format: wa_WAID_timestamp) or from contact phone
+  const waId = conversationId.startsWith('wa_') 
+    ? conversationId.split('_')[1] 
+    : data?.contact?.phonenumber?.replace(/[^0-9]/g, '') || null;
+  
+  // Fetch block status
+  const { data: blockData, mutate: refreshBlock } = useSWR(
+    waId ? `/api/users/${waId}/block` : null,
+    fetcher
+  );
+  
+  const toggleBlock = async () => {
+    if (!waId) return;
+    setIsBlocking(true);
+    try {
+      const res = await fetch(`/api/users/${waId}/block`, { method: 'POST' });
+      const result = await res.json();
+      refreshBlock(result);
+    } catch (err) {
+      console.error('Failed to toggle block:', err);
+    } finally {
+      setIsBlocking(false);
+    }
+  };
 
   return (
     <Card>
@@ -224,6 +253,24 @@ function ConversationDetail({
         </div>
         {data?.conversation?.source && (
           <Badge variant="outline">{data.conversation.source}</Badge>
+        )}
+        {waId && (
+          <Button
+            variant={blockData?.blocked ? "default" : "destructive"}
+            size="sm"
+            onClick={toggleBlock}
+            disabled={isBlocking}
+            className="gap-2"
+          >
+            {isBlocking ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : blockData?.blocked ? (
+              <ShieldCheck className="h-4 w-4" />
+            ) : (
+              <Ban className="h-4 w-4" />
+            )}
+            {blockData?.blocked ? "Unblock" : "Block"}
+          </Button>
         )}
       </CardHeader>
       <CardContent>

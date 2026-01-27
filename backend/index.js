@@ -43,23 +43,26 @@ async function logEvent(eventType, waId, jobId, payload, error) {
 // ============================================
 
 /**
- * Search for an existing conversation in Chatbase for this contact
- * Returns the most recent conversationId if found, null otherwise
+ * Find or create a contact in Chatbase by phone number
+ * Returns the Chatbase contactId
  */
-async function findExistingChatbaseConversation(contactId) {
+async function findOrCreateChatbaseContact(waId, name) {
   const chatbotId = await getConfig('chatbase_chatbot_id');
   const apiKey = await getConfig('chatbase_api_key');
   
   if (!chatbotId || !apiKey) {
-    return null;
+    throw new Error('Chatbase credentials not configured');
   }
   
+  // Format phone number with + prefix for Chatbase
+  const phoneNumber = waId.startsWith('+') ? waId : `+${waId}`;
+  
   try {
-    console.log(`[Worker] Searching for existing Chatbase conversation for contact: ${contactId}`);
+    // STEP 1: Search for existing contact by phone number
+    console.log(`[Worker] Searching for contact with phone: ${phoneNumber}`);
     
-    // Get all conversations from Chatbase
-    const response = await fetch(
-      `https://www.chatbase.co/api/v1/get-conversations?chatbotId=${chatbotId}&size=100`,
+    const searchResponse = await fetch(
+      `https://www.chatbase.co/api/v1/chatbots/${chatbotId}/contacts?per_page=1000`,
       {
         method: 'GET',
         headers: {
@@ -68,36 +71,66 @@ async function findExistingChatbaseConversation(contactId) {
       }
     );
     
-    if (!response.ok) {
-      console.log(`[Worker] Failed to fetch conversations: ${response.status}`);
+    if (searchResponse.ok) {
+      const searchData = await searchResponse.json();
+      const contacts = searchData.data || [];
+      
+      console.log(`[Worker] Found ${contacts.length} total contacts in Chatbase`);
+      
+      // Find contact matching our phone number
+      const existingContact = contacts.find(c => {
+        const contactPhone = c.phonenumber || '';
+        // Compare normalized phone numbers (remove + and spaces)
+        const normalizedContact = contactPhone.replace(/[\s+]/g, '');
+        const normalizedSearch = phoneNumber.replace(/[\s+]/g, '');
+        return normalizedContact === normalizedSearch || 
+               normalizedContact.endsWith(normalizedSearch) || 
+               normalizedSearch.endsWith(normalizedContact);
+      });
+      
+      if (existingContact) {
+        console.log(`[Worker] Found existing contact: ${existingContact.id} (${existingContact.name || 'no name'})`);
+        return existingContact.id;
+      }
+    }
+    
+    // STEP 2: No existing contact - create one
+    console.log(`[Worker] No existing contact found, creating new contact...`);
+    
+    const createResponse = await fetch(
+      `https://www.chatbase.co/api/v1/chatbots/${chatbotId}/contacts`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contacts: [{
+            external_id: waId,
+            name: name || `WhatsApp ${waId}`,
+            phonenumber: phoneNumber,
+          }],
+        }),
+      }
+    );
+    
+    if (!createResponse.ok) {
+      const errorData = await createResponse.json();
+      console.error('[Worker] Failed to create contact:', errorData);
+      // Continue without contact - conversation will still work
       return null;
     }
     
-    const data = await response.json();
-    const conversations = data.data || [];
+    const createData = await createResponse.json();
+    const newContactId = createData.data?.[0]?.id;
     
-    console.log(`[Worker] Found ${conversations.length} total conversations in Chatbase`);
-    
-    // Look for a conversation that matches our contactId pattern
-    // Our conversationIds are formatted as: wa_{waId}_timestamp
-    const matchingConv = conversations.find(conv => {
-      // Check if this conversation ID starts with our waId pattern
-      if (conv.id && conv.id.startsWith(`wa_${contactId}_`)) {
-        return true;
-      }
-      return false;
-    });
-    
-    if (matchingConv) {
-      console.log(`[Worker] Found existing conversation: ${matchingConv.id}`);
-      return matchingConv.id;
-    }
-    
-    console.log(`[Worker] No existing conversation found for contact ${contactId}`);
-    return null;
+    console.log(`[Worker] Created new contact: ${newContactId}`);
+    return newContactId;
     
   } catch (error) {
-    console.error(`[Worker] Error searching for conversation:`, error.message);
+    console.error(`[Worker] Error with contact:`, error.message);
+    // Continue without contact - conversation will still work
     return null;
   }
 }
@@ -244,6 +277,25 @@ async function updateMapping(waId, updates) {
 async function processJob(job) {
   console.log(`[Worker] Processing job ${job.id} for wa_id ${job.wa_id}`);
   
+  // Check if user is blocked BEFORE processing
+  const mapping = await getMapping(job.wa_id);
+  if (mapping?.blocked) {
+    console.log(`[Worker] User ${job.wa_id} is BLOCKED - skipping job ${job.id}`);
+    
+    // Mark job as skipped (not failed, just blocked)
+    await supabase
+      .from('scheduled_jobs')
+      .update({ 
+        status: 'skipped', 
+        last_error: 'User is blocked',
+        updated_at: new Date().toISOString() 
+      })
+      .eq('id', job.id);
+    
+    await logEvent('job_skipped_blocked', job.wa_id, job.id, { blocked: true }, null);
+    return;
+  }
+  
   // Mark as processing
   await supabase
     .from('scheduled_jobs')
@@ -258,39 +310,39 @@ async function processJob(job) {
       throw new Error('No message content in job');
     }
     
-    // Get existing mapping for this user
-    const mapping = await getMapping(waId);
+    // Use the mapping we already fetched for block check
+    let chatbaseContactId = mapping?.chatbase_contact_id;
     let conversationId = mapping?.chatbase_conversation_id;
     
-    // STEP 1: Check our local mapping first
-    if (conversationId) {
-      console.log(`[Worker] Using conversationId from local mapping: ${conversationId}`);
-    } else {
-      // STEP 2: No local mapping - search Chatbase for existing conversation
-      console.log(`[Worker] No local mapping - searching Chatbase for existing conversation...`);
-      conversationId = await findExistingChatbaseConversation(waId);
+    // STEP 1: Find or create contact in Chatbase (this is how we link conversations!)
+    if (!chatbaseContactId) {
+      console.log(`[Worker] No Chatbase contactId in local mapping, searching/creating...`);
+      chatbaseContactId = await findOrCreateChatbaseContact(waId, mapping?.name);
       
-      if (conversationId) {
-        // Found existing conversation in Chatbase! Save to local mapping
-        console.log(`[Worker] Found existing Chatbase conversation: ${conversationId}`);
-        await updateMapping(waId, {
-          chatbase_conversation_id: conversationId,
-        });
-      } else {
-        // STEP 3: No existing conversation - create a new one
-        conversationId = `wa_${waId}_${Date.now()}`;
-        console.log(`[Worker] No existing conversation found - creating new: ${conversationId}`);
-        
-        // Save to local mapping for future messages
-        await updateMapping(waId, {
-          chatbase_conversation_id: conversationId,
-        });
+      if (chatbaseContactId) {
+        // Save contactId to local mapping
+        await updateMapping(waId, { chatbase_contact_id: chatbaseContactId });
       }
+    } else {
+      console.log(`[Worker] Using existing Chatbase contactId: ${chatbaseContactId}`);
     }
     
-    // Query Chatbase WITH our conversationId - this ensures the conversation is saved in Chatbase
-    // Also pass waId as contactId so Chatbase can link the conversation to a contact
-    const chatbaseResponse = await queryChatbase(content, conversationId, waId);
+    // STEP 2: Use conversationId if we have one, or let Chatbase create a new conversation
+    // By passing contactId, Chatbase will link this conversation to the contact
+    // and we can see all conversations for this contact in Chatbase dashboard
+    if (!conversationId) {
+      // Generate a unique conversationId - Chatbase requires this to save the conversation
+      conversationId = `wa_${waId}_${Date.now()}`;
+      console.log(`[Worker] Generated new conversationId: ${conversationId}`);
+      await updateMapping(waId, { chatbase_conversation_id: conversationId });
+    } else {
+      console.log(`[Worker] Using existing conversationId: ${conversationId}`);
+    }
+    
+    // Query Chatbase with both conversationId AND contactId
+    // - conversationId: ensures conversation is saved
+    // - contactId: links conversation to the contact (for unified history)
+    const chatbaseResponse = await queryChatbase(content, conversationId, chatbaseContactId);
     
     // Send response via WhatsApp
     await sendWhatsAppMessage(waId, chatbaseResponse.text);
