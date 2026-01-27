@@ -36,9 +36,9 @@ export async function POST(request: NextRequest) {
     
     console.log(`[v0] Testing Brevo update for ${formattedPhone}`);
     
-    // Use Option 2: identifier as phone number in URL
+    // Use Option 2: identifier as phone number in URL with identifierType=phone_id
     const response = await fetch(
-      `https://api.brevo.com/v3/contacts/${encodeURIComponent(formattedPhone)}`,
+      `https://api.brevo.com/v3/contacts/${encodeURIComponent(formattedPhone)}?identifierType=phone_id`,
       {
         method: "PUT",
         headers: {

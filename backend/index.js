@@ -202,9 +202,9 @@ async function updateBrevoContact(phoneNumber) {
   console.log(`[Worker] Updating Brevo contact ${formattedPhone} - setting ANSWERED to true`);
   
   try {
-    // Use Option 2: identifier as phone number in URL
+    // Use Option 2: identifier as phone number in URL with identifierType=phone_id
     const response = await fetch(
-      `https://api.brevo.com/v3/contacts/${encodeURIComponent(formattedPhone)}`,
+      `https://api.brevo.com/v3/contacts/${encodeURIComponent(formattedPhone)}?identifierType=phone_id`,
       {
         method: 'PUT',
         headers: {
