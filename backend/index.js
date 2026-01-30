@@ -39,6 +39,51 @@ async function logEvent(eventType, waId, jobId, payload, error) {
 }
 
 // ============================================
+// CONVERSATION HISTORY
+// ============================================
+
+/**
+ * Get conversation history for a user from our local DB
+ */
+async function getConversationHistory(waId) {
+  const { data, error } = await supabase
+    .from('conversation_messages')
+    .select('role, content, created_at')
+    .eq('wa_id', waId)
+    .order('created_at', { ascending: true });
+  
+  if (error) {
+    console.error('[Worker] Error fetching conversation history:', error);
+    return [];
+  }
+  
+  console.log(`[Worker] Retrieved ${data?.length || 0} messages from history for ${waId}`);
+  return (data || []).map(msg => ({
+    role: msg.role,
+    content: msg.content,
+  }));
+}
+
+/**
+ * Save a message to conversation history
+ */
+async function saveMessage(waId, role, content) {
+  const { error } = await supabase
+    .from('conversation_messages')
+    .insert({
+      wa_id: waId,
+      role,
+      content,
+    });
+  
+  if (error) {
+    console.error('[Worker] Error saving message:', error);
+  } else {
+    console.log(`[Worker] Saved ${role} message to history`);
+  }
+}
+
+// ============================================
 // CHATBASE API
 // ============================================
 
@@ -106,7 +151,7 @@ async function findOrCreateChatbaseContact(waId, name) {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          contacts: [{
+          users: [{
             external_id: waId,
             name: name || `WhatsApp ${waId}`,
             phonenumber: phoneNumber,
@@ -135,7 +180,7 @@ async function findOrCreateChatbaseContact(waId, name) {
   }
 }
 
-async function queryChatbase(message, conversationId, contactId) {
+async function queryChatbase(message, conversationId, contactId, waId) {
   const chatbotId = await getConfig('chatbase_chatbot_id');
   const apiKey = await getConfig('chatbase_api_key');
   
@@ -143,9 +188,22 @@ async function queryChatbase(message, conversationId, contactId) {
     throw new Error('Chatbase credentials not configured');
   }
   
+  // Get FULL conversation history from our local DB
+  let messages = [];
+  if (waId) {
+    messages = await getConversationHistory(waId);
+    // Save the new user message to history
+    await saveMessage(waId, 'user', message);
+  }
+  
+  // Add the current user message
+  messages.push({ role: 'user', content: message });
+  
+  console.log(`[Worker] Sending ${messages.length} messages to Chatbase (full history)`);
+  
   const body = {
     chatbotId,
-    messages: [{ role: 'user', content: message }],
+    messages: messages, // Send FULL conversation history!
     stream: false,
   };
   
@@ -179,8 +237,14 @@ async function queryChatbase(message, conversationId, contactId) {
   const data = await response.json();
   console.log(`[Worker] Chatbase response received, conversationId: ${data.conversationId || 'none'}`);
   
+  // Save the assistant response to history
+  const responseText = data.text || data.message || data.answer || 'No response';
+  if (waId) {
+    await saveMessage(waId, 'assistant', responseText);
+  }
+  
   return {
-    text: data.text || data.message || data.answer || 'No response',
+    text: responseText,
     conversationId: data.conversationId || conversationId || '',
   };
 }
@@ -398,7 +462,7 @@ async function processJob(job) {
     // Query Chatbase with both conversationId AND contactId
     // - conversationId: ensures conversation is saved
     // - contactId: links conversation to the contact (for unified history)
-    const chatbaseResponse = await queryChatbase(content, conversationId, chatbaseContactId);
+    const chatbaseResponse = await queryChatbase(content, conversationId, chatbaseContactId, waId);
     
     // Send response via WhatsApp
     await sendWhatsAppMessage(waId, chatbaseResponse.text);
