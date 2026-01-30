@@ -28,41 +28,51 @@ interface ChatMessage {
  * Get full conversation history for a WhatsApp user
  */
 async function getConversationHistory(waId: string): Promise<ChatMessage[]> {
+  console.log('[v0] getConversationHistory called for waId:', waId);
   const supabase = createAdminClient();
   
   const { data, error } = await supabase
     .from('conversation_messages')
-    .select('role, content')
+    .select('role, content, created_at')
     .eq('wa_id', waId)
     .order('created_at', { ascending: true });
   
   if (error) {
-    console.error('[Chatbase] Error fetching conversation history:', error);
+    console.error('[v0] ERROR fetching conversation history:', error);
     return [];
   }
   
-  return (data || []).map(msg => ({
+  console.log('[v0] Raw history data from DB:', JSON.stringify(data, null, 2));
+  
+  const messages = (data || []).map(msg => ({
     role: msg.role as 'user' | 'assistant',
     content: msg.content,
   }));
+  
+  console.log('[v0] Processed messages:', messages.length, 'items');
+  return messages;
 }
 
 /**
  * Save a message to conversation history
  */
 async function saveMessage(waId: string, role: 'user' | 'assistant', content: string): Promise<void> {
+  console.log('[v0] saveMessage called - waId:', waId, 'role:', role, 'content length:', content.length);
   const supabase = createAdminClient();
   
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('conversation_messages')
     .insert({
       wa_id: waId,
       role,
       content,
-    });
+    })
+    .select();
   
   if (error) {
-    console.error('[Chatbase] Error saving message:', error);
+    console.error('[v0] ERROR saving message:', error);
+  } else {
+    console.log('[v0] Message saved successfully:', data);
   }
 }
 
@@ -76,6 +86,8 @@ export async function queryChatbaseWithConversation(
   conversationId?: string,
   waId?: string
 ): Promise<ChatbaseResponse & { conversationId: string }> {
+  console.log('[v0] queryChatbaseWithConversation called with waId:', waId, 'conversationId:', conversationId);
+  
   const chatbotId = await getConfig('chatbase_chatbot_id');
   const apiKey = await getConfig('chatbase_api_key');
   
@@ -87,15 +99,22 @@ export async function queryChatbaseWithConversation(
   let messages: ChatMessage[] = [];
   
   if (waId) {
+    console.log('[v0] Fetching conversation history for waId:', waId);
     // Get existing history
     messages = await getConversationHistory(waId);
+    console.log('[v0] Retrieved', messages.length, 'messages from history');
     
     // Save the new user message to history
+    console.log('[v0] Saving new user message to history');
     await saveMessage(waId, 'user', userMessage);
+    console.log('[v0] User message saved');
+  } else {
+    console.log('[v0] WARNING: No waId provided, conversation history will not be tracked!');
   }
   
   // Add the current user message to the messages array
   messages.push({ role: 'user', content: userMessage });
+  console.log('[v0] Total messages to send to Chatbase:', messages.length);
   
   const url = `https://www.chatbase.co/api/v1/chat`;
   
