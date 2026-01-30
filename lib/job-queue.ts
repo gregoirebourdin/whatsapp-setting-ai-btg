@@ -128,10 +128,11 @@ async function processJob(job: Job): Promise<void> {
     // Get mapping for Chatbase conversation ID
     const mapping = await getOrCreateMapping(waId);
     
-    // Query Chatbase WITH conversationId - Chatbase manages history automatically!
+    // Query Chatbase WITH full conversation history
     const chatbaseResponse = await queryChatbaseWithConversation(
       content,
-      mapping.chatbase_conversation_id || undefined
+      mapping.chatbase_conversation_id || undefined,
+      waId // Pass waId to fetch and store conversation history
     );
     
     // Update mapping with the conversation ID from Chatbase
