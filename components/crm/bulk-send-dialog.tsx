@@ -457,11 +457,11 @@ export function BulkSendDialog({
               <div className="grid grid-cols-3 gap-4">
                 <div className="rounded-lg border border-border p-4 text-center">
                   <p className="text-2xl font-bold text-foreground">{result.total}</p>
-                  <p className="text-xs text-muted-foreground">Envoyes</p>
+                  <p className="text-xs text-muted-foreground">Total</p>
                 </div>
                 <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4 text-center">
                   <p className="text-2xl font-bold text-emerald-600">{result.sent}</p>
-                  <p className="text-xs text-muted-foreground">Reussis</p>
+                  <p className="text-xs text-muted-foreground">Envoyes</p>
                 </div>
                 <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-4 text-center">
                   <p className="text-2xl font-bold text-red-600">{result.failed}</p>

@@ -19,6 +19,13 @@ interface ParsedContact {
   phone: string;
 }
 
+interface ColumnMapping {
+  headers: string[];
+  firstnameIdx: number;
+  phoneIdx: number;
+  sampleRows: string[][];
+}
+
 interface CsvImportDialogProps {
   onImportComplete: () => void;
 }
@@ -34,6 +41,9 @@ export function CsvImportDialog({ onImportComplete }: CsvImportDialogProps) {
     updated: number;
     errors?: string[];
   } | null>(null);
+  const [columnMapping, setColumnMapping] = useState<ColumnMapping | null>(null);
+  const [rawLines, setRawLines] = useState<string[]>([]);
+  const [rawSeparator, setRawSeparator] = useState(",");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const resetState = useCallback(() => {
@@ -41,6 +51,8 @@ export function CsvImportDialog({ onImportComplete }: CsvImportDialogProps) {
     setParsedContacts([]);
     setParseErrors([]);
     setResult(null);
+    setColumnMapping(null);
+    setRawLines([]);
   }, []);
 
   // Proper CSV line parser that handles quoted fields (e.g. "Dupont, Jean")
@@ -129,10 +141,16 @@ export function CsvImportDialog({ onImportComplete }: CsvImportDialogProps) {
     );
 
     if (firstnameIdx === -1 || phoneIdx === -1) {
-      setParseErrors([
-        `Colonnes introuvables. En-tetes detectes: ${header.join(", ")}. ` +
-        `Colonnes requises: firstname (ou prenom/nom) et phone (ou telephone/mobile/whatsapp).`,
-      ]);
+      // Save raw data for manual column mapping
+      const sampleRows = lines.slice(1, 4).map((line) => parseCSVLine(line, separator));
+      setColumnMapping({
+        headers: header,
+        firstnameIdx: firstnameIdx !== -1 ? firstnameIdx : -1,
+        phoneIdx: phoneIdx !== -1 ? phoneIdx : -1,
+        sampleRows,
+      });
+      setRawLines(lines);
+      setRawSeparator(separator);
       return;
     }
 
@@ -191,6 +209,42 @@ export function CsvImportDialog({ onImportComplete }: CsvImportDialogProps) {
     setParsedContacts(contacts);
     setParseErrors(errors);
   }, [detectSeparator, parseCSVLine]);
+
+  // Called when user manually maps columns and clicks "Confirmer"
+  const applyManualMapping = useCallback(() => {
+    if (!columnMapping || columnMapping.firstnameIdx === -1 || columnMapping.phoneIdx === -1) {
+      setParseErrors(["Veuillez selectionner une colonne pour le prenom et le telephone."]);
+      return;
+    }
+
+    const contacts: ParsedContact[] = [];
+    const errors: string[] = [];
+    const seenPhones = new Set<string>();
+
+    for (let i = 1; i < rawLines.length; i++) {
+      const cols = parseCSVLine(rawLines[i], rawSeparator);
+      const firstname = cols[columnMapping.firstnameIdx]?.replace(/"/g, "").trim();
+      const rawPhone = cols[columnMapping.phoneIdx]?.replace(/"/g, "").trim();
+
+      if (!firstname && !rawPhone) continue;
+      if (!firstname) { errors.push(`Ligne ${i + 1}: prenom manquant`); continue; }
+      if (!rawPhone) { errors.push(`Ligne ${i + 1}: telephone manquant`); continue; }
+
+      let phone = rawPhone.replace(/[\s\-().]/g, "");
+      if (phone.startsWith("00") && phone.length > 10) phone = "+" + phone.slice(2);
+      if (phone.match(/^0[67]/) && phone.length === 10) phone = "+33" + phone.slice(1);
+      if (!phone.startsWith("+") && phone.length > 10) phone = "+" + phone;
+      if (phone.replace(/\+/g, "").length < 8) { errors.push(`Ligne ${i + 1}: numero trop court (${phone})`); continue; }
+      if (seenPhones.has(phone)) { errors.push(`Ligne ${i + 1}: doublon ignore (${phone})`); continue; }
+      seenPhones.add(phone);
+
+      contacts.push({ firstname, phone });
+    }
+
+    setParsedContacts(contacts);
+    setParseErrors(errors);
+    setColumnMapping(null);
+  }, [columnMapping, rawLines, rawSeparator, parseCSVLine]);
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -336,6 +390,103 @@ export function CsvImportDialog({ onImportComplete }: CsvImportDialogProps) {
                 onChange={handleFileChange}
                 className="hidden"
               />
+            </div>
+          )}
+
+          {/* Column mapping UI - shown when auto-detect fails */}
+          {columnMapping && !result && (
+            <div className="space-y-4">
+              <Alert>
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-sm">
+                  Les colonnes n'ont pas pu etre detectees automatiquement.
+                  Associez chaque champ a la bonne colonne ci-dessous.
+                </AlertDescription>
+              </Alert>
+
+              {/* Show sample data */}
+              <div className="rounded-lg border border-border overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-border bg-secondary/50">
+                      {columnMapping.headers.map((h, i) => (
+                        <th key={i} className="px-3 py-2 text-left font-medium text-foreground">
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {columnMapping.sampleRows.map((row, ri) => (
+                      <tr key={ri} className="border-b border-border last:border-0">
+                        {row.map((cell, ci) => (
+                          <td key={ci} className="px-3 py-1.5 text-muted-foreground">
+                            {cell.replace(/"/g, "").slice(0, 30) || "-"}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-foreground">Prenom</label>
+                  <select
+                    value={columnMapping.firstnameIdx}
+                    onChange={(e) =>
+                      setColumnMapping({
+                        ...columnMapping,
+                        firstnameIdx: parseInt(e.target.value),
+                      })
+                    }
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
+                  >
+                    <option value={-1}>-- Selectionner --</option>
+                    {columnMapping.headers.map((h, i) => (
+                      <option key={i} value={i}>
+                        {h}
+                        {columnMapping.sampleRows[0]?.[i]
+                          ? ` (ex: ${columnMapping.sampleRows[0][i].replace(/"/g, "").slice(0, 20)})`
+                          : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-foreground">Telephone</label>
+                  <select
+                    value={columnMapping.phoneIdx}
+                    onChange={(e) =>
+                      setColumnMapping({
+                        ...columnMapping,
+                        phoneIdx: parseInt(e.target.value),
+                      })
+                    }
+                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
+                  >
+                    <option value={-1}>-- Selectionner --</option>
+                    {columnMapping.headers.map((h, i) => (
+                      <option key={i} value={i}>
+                        {h}
+                        {columnMapping.sampleRows[0]?.[i]
+                          ? ` (ex: ${columnMapping.sampleRows[0][i].replace(/"/g, "").slice(0, 20)})`
+                          : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <Button
+                onClick={applyManualMapping}
+                disabled={columnMapping.firstnameIdx === -1 || columnMapping.phoneIdx === -1}
+                className="w-full"
+              >
+                Confirmer le mapping
+              </Button>
             </div>
           )}
 

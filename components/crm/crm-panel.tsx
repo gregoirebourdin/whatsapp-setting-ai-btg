@@ -33,6 +33,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Eye,
+  ArrowLeft,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { CsvImportDialog } from "./csv-import-dialog";
@@ -105,6 +109,7 @@ export function CrmPanel() {
   const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [activeView, setActiveView] = useState<"contacts" | "campaigns">("contacts");
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
 
   const {
     data: contactsData,
@@ -125,6 +130,25 @@ export function CrmPanel() {
     fetcher,
     { revalidateOnFocus: false }
   );
+
+  interface CampaignRecipient {
+    id: string;
+    status: string;
+    error: string | null;
+    sent_at: string | null;
+    contact: { id: string; firstname: string; phone: string } | null;
+  }
+
+  interface CampaignDetailResponse {
+    campaign: Campaign;
+    recipients: CampaignRecipient[];
+  }
+
+  const { data: campaignDetail, isLoading: campaignDetailLoading } =
+    useSWR<CampaignDetailResponse>(
+      selectedCampaignId ? `/api/crm/campaigns/${selectedCampaignId}` : null,
+      fetcher
+    );
 
   const contacts = contactsData?.contacts || [];
   const totalContacts = contactsData?.total || 0;
@@ -499,7 +523,11 @@ export function CrmPanel() {
                       variant="outline"
                       size="sm"
                       disabled={page <= 1}
-                      onClick={() => { setPage((p) => p - 1); setSelectedIds(new Set()); }}
+                      onClick={() => {
+                        setPage((p) => p - 1);
+                        // Only clear selection if it was a page-level selection, not "select all"
+                        if (selectedIds.size <= contacts.length) setSelectedIds(new Set());
+                      }}
                     >
                       <ChevronLeft className="h-4 w-4" />
                     </Button>
@@ -507,7 +535,10 @@ export function CrmPanel() {
                       variant="outline"
                       size="sm"
                       disabled={page >= totalPages}
-                      onClick={() => { setPage((p) => p + 1); setSelectedIds(new Set()); }}
+                      onClick={() => {
+                        setPage((p) => p + 1);
+                        if (selectedIds.size <= contacts.length) setSelectedIds(new Set());
+                      }}
                     >
                       <ChevronRight className="h-4 w-4" />
                     </Button>
@@ -520,12 +551,12 @@ export function CrmPanel() {
       )}
 
       {/* Campaigns view */}
-      {activeView === "campaigns" && (
+      {activeView === "campaigns" && !selectedCampaignId && (
         <Card>
           <CardHeader>
             <CardTitle>Historique des campagnes</CardTitle>
             <CardDescription>
-              Retrouvez l'historique de vos envois en masse avec les statistiques de chaque campagne.
+              Retrouvez l'historique de vos envois en masse. Cliquez sur une campagne pour voir le detail.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -558,11 +589,16 @@ export function CrmPanel() {
                       <TableHead className="text-right">Envoyes</TableHead>
                       <TableHead className="text-right hidden sm:table-cell">Echoues</TableHead>
                       <TableHead className="hidden md:table-cell">Date</TableHead>
+                      <TableHead className="w-10" />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {campaigns.map((campaign) => (
-                      <TableRow key={campaign.id}>
+                      <TableRow
+                        key={campaign.id}
+                        className="cursor-pointer hover:bg-secondary/50"
+                        onClick={() => setSelectedCampaignId(campaign.id)}
+                      >
                         <TableCell className="font-medium text-foreground">
                           {campaign.name}
                         </TableCell>
@@ -587,10 +623,144 @@ export function CrmPanel() {
                             })}
                           </div>
                         </TableCell>
+                        <TableCell>
+                          <Eye className="h-4 w-4 text-muted-foreground" />
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Campaign detail view */}
+      {activeView === "campaigns" && selectedCampaignId && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedCampaignId(null)}
+                className="gap-1.5"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Retour
+              </Button>
+              <div className="flex-1">
+                <CardTitle>
+                  {campaignDetail?.campaign?.name || "Chargement..."}
+                </CardTitle>
+                <CardDescription className="flex items-center gap-2 mt-1">
+                  {campaignDetail?.campaign && (
+                    <>
+                      <span>Template: {campaignDetail.campaign.template_name}</span>
+                      <span>-</span>
+                      {getCampaignStatusBadge(campaignDetail.campaign.status)}
+                    </>
+                  )}
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {campaignDetailLoading && (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            )}
+
+            {campaignDetail && !campaignDetailLoading && (
+              <div className="space-y-4">
+                {/* Summary stats */}
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="rounded-lg border border-border p-3 text-center">
+                    <p className="text-xl font-bold text-foreground">
+                      {campaignDetail.campaign.total_recipients}
+                    </p>
+                    <p className="text-xs text-muted-foreground">Total</p>
+                  </div>
+                  <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 text-center">
+                    <p className="text-xl font-bold text-emerald-600">
+                      {campaignDetail.campaign.sent_count}
+                    </p>
+                    <p className="text-xs text-muted-foreground">Envoyes</p>
+                  </div>
+                  <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-center">
+                    <p className="text-xl font-bold text-red-600">
+                      {campaignDetail.campaign.failed_count}
+                    </p>
+                    <p className="text-xs text-muted-foreground">Echoues</p>
+                  </div>
+                </div>
+
+                {/* Recipients table */}
+                <div className="rounded-lg border border-border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Prenom</TableHead>
+                        <TableHead>Telephone</TableHead>
+                        <TableHead>Statut</TableHead>
+                        <TableHead className="hidden sm:table-cell">Erreur</TableHead>
+                        <TableHead className="hidden md:table-cell">Envoye a</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {campaignDetail.recipients.map((recipient) => (
+                        <TableRow key={recipient.id}>
+                          <TableCell className="font-medium text-foreground">
+                            {recipient.contact?.firstname || "Contact supprime"}
+                          </TableCell>
+                          <TableCell className="font-mono text-sm text-muted-foreground">
+                            {recipient.contact?.phone || "-"}
+                          </TableCell>
+                          <TableCell>
+                            {recipient.status === "sent" ? (
+                              <div className="flex items-center gap-1.5 text-emerald-600">
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                                <span className="text-sm">Envoye</span>
+                              </div>
+                            ) : recipient.status === "failed" ? (
+                              <div className="flex items-center gap-1.5 text-red-600">
+                                <XCircle className="h-3.5 w-3.5" />
+                                <span className="text-sm">Echoue</span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5 text-muted-foreground">
+                                <Clock className="h-3.5 w-3.5" />
+                                <span className="text-sm">En attente</span>
+                              </div>
+                            )}
+                          </TableCell>
+                          <TableCell className="hidden text-xs text-muted-foreground sm:table-cell max-w-[200px] truncate">
+                            {recipient.error || "-"}
+                          </TableCell>
+                          <TableCell className="hidden text-sm text-muted-foreground md:table-cell">
+                            {recipient.sent_at
+                              ? new Date(recipient.sent_at).toLocaleString("fr-FR", {
+                                  day: "2-digit",
+                                  month: "short",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })
+                              : "-"}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {campaignDetail.recipients.length === 0 && (
+                        <TableRow>
+                          <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
+                            Aucun destinataire enregistre pour cette campagne.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
               </div>
             )}
           </CardContent>

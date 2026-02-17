@@ -26,11 +26,13 @@ export function AddContactDialog({ onContactAdded }: AddContactDialogProps) {
   const [phone, setPhone] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
 
   const resetForm = useCallback(() => {
     setFirstname("");
     setPhone("");
     setError(null);
+    setSuccess(false);
   }, []);
 
   const handleSubmit = useCallback(
@@ -55,8 +57,14 @@ export function AddContactDialog({ onContactAdded }: AddContactDialogProps) {
 
         if (res.ok) {
           onContactAdded();
-          setOpen(false);
-          resetForm();
+          setSuccess(true);
+          setFirstname("");
+          setPhone("");
+          // Auto-close after showing success
+          setTimeout(() => {
+            setOpen(false);
+            resetForm();
+          }, 1500);
         } else {
           setError(data.error || "Erreur lors de l'ajout");
         }
@@ -116,6 +124,14 @@ export function AddContactDialog({ onContactAdded }: AddContactDialogProps) {
                 Format international avec indicatif pays (ex: +33 pour la France)
               </p>
             </div>
+
+            {success && (
+              <Alert className="border-emerald-500/30 bg-emerald-500/10">
+                <AlertDescription className="text-emerald-700 font-medium">
+                  Contact ajoute avec succes !
+                </AlertDescription>
+              </Alert>
+            )}
 
             {error && (
               <Alert variant="destructive">
