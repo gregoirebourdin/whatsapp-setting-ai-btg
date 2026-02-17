@@ -17,7 +17,9 @@ export async function GET(request: NextRequest) {
     .range(offset, offset + limit - 1);
 
   if (search) {
-    query = query.or(`firstname.ilike.%${search}%,phone.ilike.%${search}%`);
+    // Sanitize search to prevent injection in PostgREST query strings
+    const sanitizedSearch = search.replace(/[%_\\]/g, '\\$&');
+    query = query.or(`firstname.ilike.%${sanitizedSearch}%,phone.ilike.%${sanitizedSearch}%`);
   }
 
   const { data, error, count } = await query;
@@ -52,8 +54,21 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'firstname and phone are required' }, { status: 400 });
   }
 
-  // Normalize phone number: remove spaces, dashes, ensure + prefix
-  const normalizedPhone = phone.replace(/[\s\-()]/g, '');
+  // Normalize phone: remove spaces, dashes, parentheses, dots
+  let normalizedPhone = phone.replace(/[\s\-().]/g, '');
+
+  // Convert 00XX to +XX format
+  if (normalizedPhone.startsWith('00') && normalizedPhone.length > 10) {
+    normalizedPhone = '+' + normalizedPhone.slice(2);
+  }
+  // French local numbers: 06/07 -> +336/+337
+  if (/^0[67]/.test(normalizedPhone) && normalizedPhone.length === 10) {
+    normalizedPhone = '+33' + normalizedPhone.slice(1);
+  }
+  // Ensure + prefix for international
+  if (!normalizedPhone.startsWith('+') && normalizedPhone.length > 10) {
+    normalizedPhone = '+' + normalizedPhone;
+  }
 
   const { data, error } = await supabase
     .from('crm_contacts')

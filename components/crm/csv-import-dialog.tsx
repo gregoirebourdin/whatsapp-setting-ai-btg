@@ -43,8 +43,52 @@ export function CsvImportDialog({ onImportComplete }: CsvImportDialogProps) {
     setResult(null);
   }, []);
 
+  // Proper CSV line parser that handles quoted fields (e.g. "Dupont, Jean")
+  const parseCSVLine = useCallback((line: string, separator: string): string[] => {
+    const result: string[] = [];
+    let current = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++; // skip escaped quote
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === separator && !inQuotes) {
+        result.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    result.push(current.trim());
+    return result;
+  }, []);
+
+  // Detect the separator used in the CSV (comma, semicolon, tab)
+  const detectSeparator = useCallback((headerLine: string): string => {
+    // Count occurrences of each potential separator in the header
+    const counts: Record<string, number> = { ";": 0, ",": 0, "\t": 0, "|": 0 };
+    // Only count separators outside of quotes
+    let inQuotes = false;
+    for (const char of headerLine) {
+      if (char === '"') inQuotes = !inQuotes;
+      if (!inQuotes && char in counts) counts[char]++;
+    }
+    // Return the separator with the most occurrences (default to comma)
+    const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    return best[1] > 0 ? best[0] : ",";
+  }, []);
+
   const parseCSV = useCallback((text: string) => {
-    const lines = text
+    // Strip UTF-8 BOM that Excel adds
+    const cleanText = text.replace(/^\uFEFF/, "");
+
+    const lines = cleanText
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter(Boolean);
@@ -54,15 +98,21 @@ export function CsvImportDialog({ onImportComplete }: CsvImportDialogProps) {
       return;
     }
 
+    const separator = detectSeparator(lines[0]);
+
     // Parse header
-    const header = lines[0].toLowerCase().split(/[,;|\t]/).map((h) => h.trim().replace(/"/g, ""));
+    const header = parseCSVLine(lines[0], separator).map((h) =>
+      h.toLowerCase().replace(/"/g, "").trim()
+    );
     const firstnameIdx = header.findIndex(
       (h) =>
         h === "firstname" ||
         h === "prenom" ||
         h === "prénom" ||
         h === "first_name" ||
-        h === "nom"
+        h === "nom" ||
+        h === "name" ||
+        h === "first name"
     );
     const phoneIdx = header.findIndex(
       (h) =>
@@ -73,41 +123,74 @@ export function CsvImportDialog({ onImportComplete }: CsvImportDialogProps) {
         h === "mobile" ||
         h === "numero" ||
         h === "numéro" ||
-        h === "phone_number"
+        h === "phone_number" ||
+        h === "whatsapp" ||
+        h === "number"
     );
 
     if (firstnameIdx === -1 || phoneIdx === -1) {
       setParseErrors([
-        `Colonnes introuvables. En-tetes detectes: ${header.join(", ")}. Colonnes requises: firstname (ou prenom), phone (ou telephone).`,
+        `Colonnes introuvables. En-tetes detectes: ${header.join(", ")}. ` +
+        `Colonnes requises: firstname (ou prenom/nom) et phone (ou telephone/mobile/whatsapp).`,
       ]);
       return;
     }
 
     const contacts: ParsedContact[] = [];
     const errors: string[] = [];
+    const seenPhones = new Set<string>();
 
     for (let i = 1; i < lines.length; i++) {
-      const cols = lines[i].split(/[,;|\t]/).map((c) => c.trim().replace(/"/g, ""));
-      const firstname = cols[firstnameIdx]?.trim();
-      const phone = cols[phoneIdx]?.trim();
+      const cols = parseCSVLine(lines[i], separator);
+      const firstname = cols[firstnameIdx]?.replace(/"/g, "").trim();
+      const rawPhone = cols[phoneIdx]?.replace(/"/g, "").trim();
 
-      if (!firstname && !phone) continue;
+      if (!firstname && !rawPhone) continue;
 
       if (!firstname) {
         errors.push(`Ligne ${i + 1}: prenom manquant`);
         continue;
       }
-      if (!phone) {
+      if (!rawPhone) {
         errors.push(`Ligne ${i + 1}: telephone manquant`);
         continue;
       }
+
+      // Normalize phone: remove spaces, dashes, parentheses, dots
+      let phone = rawPhone.replace(/[\s\-().]/g, "");
+
+      // Convert 00XX to +XX format
+      if (phone.startsWith("00") && phone.length > 10) {
+        phone = "+" + phone.slice(2);
+      }
+      // French local numbers: 06/07 -> +336/+337
+      if (phone.match(/^0[67]/) && phone.length === 10) {
+        phone = "+33" + phone.slice(1);
+      }
+
+      // Ensure + prefix for international
+      if (!phone.startsWith("+") && phone.length > 10) {
+        phone = "+" + phone;
+      }
+
+      if (phone.replace(/\+/g, "").length < 8) {
+        errors.push(`Ligne ${i + 1}: numero trop court (${phone})`);
+        continue;
+      }
+
+      // Deduplicate within the CSV file itself
+      if (seenPhones.has(phone)) {
+        errors.push(`Ligne ${i + 1}: doublon ignore (${phone})`);
+        continue;
+      }
+      seenPhones.add(phone);
 
       contacts.push({ firstname, phone });
     }
 
     setParsedContacts(contacts);
     setParseErrors(errors);
-  }, []);
+  }, [detectSeparator, parseCSVLine]);
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -123,7 +206,10 @@ export function CsvImportDialog({ onImportComplete }: CsvImportDialogProps) {
         const text = ev.target?.result as string;
         parseCSV(text);
       };
-      reader.readAsText(f);
+      reader.onerror = () => {
+        setParseErrors(["Erreur lors de la lecture du fichier."]);
+      };
+      reader.readAsText(f, "UTF-8");
     },
     [parseCSV]
   );
@@ -131,8 +217,19 @@ export function CsvImportDialog({ onImportComplete }: CsvImportDialogProps) {
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
+      e.stopPropagation();
       const f = e.dataTransfer.files?.[0];
-      if (!f || !f.name.endsWith(".csv")) return;
+      if (!f) return;
+
+      // Accept .csv and .txt files
+      const validExtensions = [".csv", ".txt", ".tsv"];
+      const hasValidExt = validExtensions.some((ext) => f.name.toLowerCase().endsWith(ext));
+      const hasValidType = f.type === "text/csv" || f.type === "text/plain" || f.type === "text/tab-separated-values" || f.type === "";
+
+      if (!hasValidExt && !hasValidType) {
+        setParseErrors(["Format non supporte. Veuillez utiliser un fichier .csv, .txt ou .tsv"]);
+        return;
+      }
 
       setFile(f);
       setResult(null);
@@ -143,7 +240,10 @@ export function CsvImportDialog({ onImportComplete }: CsvImportDialogProps) {
         const text = ev.target?.result as string;
         parseCSV(text);
       };
-      reader.readAsText(f);
+      reader.onerror = () => {
+        setParseErrors(["Erreur lors de la lecture du fichier."]);
+      };
+      reader.readAsText(f, "UTF-8");
     },
     [parseCSV]
   );
@@ -232,7 +332,7 @@ export function CsvImportDialog({ onImportComplete }: CsvImportDialogProps) {
               <input
                 ref={fileRef}
                 type="file"
-                accept=".csv"
+                accept=".csv,.txt,.tsv,text/csv,text/plain"
                 onChange={handleFileChange}
                 className="hidden"
               />

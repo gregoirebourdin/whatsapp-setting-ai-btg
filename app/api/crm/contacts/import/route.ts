@@ -29,11 +29,24 @@ export async function POST(request: NextRequest) {
       continue;
     }
 
-    // Normalize phone: remove spaces, dashes, ensure clean
-    const normalizedPhone = phone.toString().replace(/[\s\-()]/g, '');
+    // Normalize phone: remove spaces, dashes, parentheses, dots
+    let normalizedPhone = phone.toString().replace(/[\s\-().]/g, '');
 
-    if (normalizedPhone.length < 8) {
-      errors.push(`Row ${i + 1}: phone number too short (${normalizedPhone})`);
+    // Convert 00XX to +XX format
+    if (normalizedPhone.startsWith('00') && normalizedPhone.length > 10) {
+      normalizedPhone = '+' + normalizedPhone.slice(2);
+    }
+    // French local numbers: 06/07 -> +336/+337
+    if (/^0[67]/.test(normalizedPhone) && normalizedPhone.length === 10) {
+      normalizedPhone = '+33' + normalizedPhone.slice(1);
+    }
+    // Ensure + prefix for international
+    if (!normalizedPhone.startsWith('+') && normalizedPhone.length > 10) {
+      normalizedPhone = '+' + normalizedPhone;
+    }
+
+    if (normalizedPhone.replace(/\+/g, '').length < 8) {
+      errors.push(`Ligne ${i + 1}: numero trop court (${normalizedPhone})`);
       continue;
     }
 

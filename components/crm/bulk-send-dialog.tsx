@@ -51,7 +51,11 @@ interface BulkSendDialogProps {
   onSendComplete: () => void;
 }
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+const fetcher = async (url: string) => {
+  const res = await fetch(url);
+  // Templates endpoint returns 200 even with errors (with empty templates array)
+  return res.json();
+};
 
 function getComponentIcon(type: string) {
   switch (type) {
@@ -127,6 +131,7 @@ export function BulkSendDialog({
     sent: number;
     failed: number;
     total: number;
+    skippedOptOut?: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState<"select" | "confirm" | "result">("select");
@@ -182,7 +187,12 @@ export function BulkSendDialog({
       const data = await res.json();
 
       if (res.ok) {
-        setResult({ sent: data.sent, failed: data.failed, total: data.total });
+        setResult({
+          sent: data.sent,
+          failed: data.failed,
+          total: data.total,
+          skippedOptOut: data.skippedOptOut || 0,
+        });
         setStep("result");
         onSendComplete();
       } else {
@@ -447,17 +457,27 @@ export function BulkSendDialog({
               <div className="grid grid-cols-3 gap-4">
                 <div className="rounded-lg border border-border p-4 text-center">
                   <p className="text-2xl font-bold text-foreground">{result.total}</p>
-                  <p className="text-xs text-muted-foreground">Total</p>
+                  <p className="text-xs text-muted-foreground">Envoyes</p>
                 </div>
                 <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4 text-center">
                   <p className="text-2xl font-bold text-emerald-600">{result.sent}</p>
-                  <p className="text-xs text-muted-foreground">Envoyes</p>
+                  <p className="text-xs text-muted-foreground">Reussis</p>
                 </div>
                 <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-4 text-center">
                   <p className="text-2xl font-bold text-red-600">{result.failed}</p>
                   <p className="text-xs text-muted-foreground">Echoues</p>
                 </div>
               </div>
+
+              {result.skippedOptOut && result.skippedOptOut > 0 ? (
+                <Alert className="border-amber-500/30 bg-amber-500/10">
+                  <AlertCircle className="h-4 w-4 text-amber-600" />
+                  <AlertDescription className="text-sm text-amber-700">
+                    {result.skippedOptOut} contact{result.skippedOptOut > 1 ? "s" : ""} non
+                    envoye{result.skippedOptOut > 1 ? "s" : ""} car le opt-in est desactive.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
             </div>
           )}
         </div>

@@ -74,7 +74,14 @@ interface CampaignsResponse {
   campaigns: Campaign[];
 }
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+const fetcher = async (url: string) => {
+  const res = await fetch(url);
+  if (!res.ok) {
+    const error = new Error("Erreur lors du chargement des donnees");
+    throw error;
+  }
+  return res.json();
+};
 
 function getCampaignStatusBadge(status: string) {
   switch (status) {
@@ -114,8 +121,9 @@ export function CrmPanel() {
     data: campaignsData,
     mutate: refreshCampaigns,
   } = useSWR<CampaignsResponse>(
-    activeView === "campaigns" ? "/api/crm/campaigns" : null,
-    fetcher
+    "/api/crm/campaigns",
+    fetcher,
+    { revalidateOnFocus: false }
   );
 
   const contacts = contactsData?.contacts || [];
@@ -148,10 +156,24 @@ export function CrmPanel() {
     });
   }, []);
 
-  const selectAll = useCallback(() => {
-    // Select ALL contacts (not just current page) - we pass all IDs we know
-    setSelectedIds(new Set(contacts.map((c) => c.id)));
-  }, [contacts]);
+  const [selectingAll, setSelectingAll] = useState(false);
+  const selectAll = useCallback(async () => {
+    // Fetch ALL contact IDs from the server (not just current page)
+    setSelectingAll(true);
+    try {
+      const searchParam = search ? `&search=${encodeURIComponent(search)}` : "";
+      const res = await fetch(`/api/crm/contacts?page=1&limit=10000${searchParam}`);
+      const data = await res.json();
+      if (data.contacts) {
+        setSelectedIds(new Set(data.contacts.map((c: Contact) => c.id)));
+      }
+    } catch {
+      // Fallback: just select current page
+      setSelectedIds(new Set(contacts.map((c) => c.id)));
+    } finally {
+      setSelectingAll(false);
+    }
+  }, [contacts, search]);
 
   const handleDelete = useCallback(async () => {
     if (selectedIds.size === 0) return;
@@ -362,7 +384,7 @@ export function CrmPanel() {
             {contacts.length > 0 && (
               <>
                 {/* Select all banner */}
-                {allSelected && totalContacts > contacts.length && (
+                {allSelected && totalContacts > contacts.length && selectedIds.size < totalContacts && (
                   <div className="mb-3 flex items-center justify-center gap-2 rounded-lg bg-secondary/50 p-2 text-sm">
                     <span className="text-muted-foreground">
                       Les {contacts.length} contacts de cette page sont selectionnes.
@@ -372,8 +394,31 @@ export function CrmPanel() {
                       size="sm"
                       className="h-auto p-0"
                       onClick={selectAll}
+                      disabled={selectingAll}
                     >
-                      Selectionner les {totalContacts} contacts
+                      {selectingAll ? (
+                        <>
+                          <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />
+                          Chargement...
+                        </>
+                      ) : (
+                        `Selectionner les ${totalContacts} contacts`
+                      )}
+                    </Button>
+                  </div>
+                )}
+                {selectedIds.size > contacts.length && (
+                  <div className="mb-3 flex items-center justify-center gap-2 rounded-lg bg-secondary/50 p-2 text-sm">
+                    <span className="font-medium text-foreground">
+                      {selectedIds.size} contacts selectionnes sur toutes les pages.
+                    </span>
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="h-auto p-0"
+                      onClick={() => setSelectedIds(new Set())}
+                    >
+                      Tout deselectionner
                     </Button>
                   </div>
                 )}

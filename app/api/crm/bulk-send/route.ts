@@ -1,20 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
-
-const WHATSAPP_API_VERSION = 'v18.0';
-
-async function getConfig(key: string): Promise<string | null> {
-  const supabase = createAdminClient();
-  const { data } = await supabase
-    .from('config')
-    .select('value')
-    .eq('key', key)
-    .single();
-  return data?.value || null;
-}
+import { sendWhatsAppMessage } from '@/lib/whatsapp';
 
 // Delay between each message to respect WhatsApp rate limits
-// WhatsApp Cloud API: 80 messages/second for business tier, but we'll be conservative
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -39,40 +27,63 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'templateName is required' }, { status: 400 });
   }
 
-  const phoneNumberId = await getConfig('whatsapp_phone_number_id');
-  const accessToken = await getConfig('whatsapp_access_token');
-
-  if (!phoneNumberId || !accessToken) {
-    return NextResponse.json(
-      { error: 'WhatsApp credentials not configured' },
-      { status: 400 }
-    );
+  // Fetch ALL selected contacts in batches (Supabase .in() has limits for large lists)
+  interface CrmContact {
+    id: string;
+    firstname: string;
+    phone: string;
+    opted_in: boolean;
+    tags: string[];
+    notes: string | null;
   }
+  const BATCH_SIZE = 200;
+  const allContacts: CrmContact[] = [];
+  let contactsError: string | null = null;
 
-  // Fetch the contacts
-  const { data: contacts, error: contactsError } = await supabase
-    .from('crm_contacts')
-    .select('*')
-    .in('id', contactIds)
-    .eq('opted_in', true);
+  for (let i = 0; i < contactIds.length; i += BATCH_SIZE) {
+    const batchIds = contactIds.slice(i, i + BATCH_SIZE);
+    const { data, error } = await supabase
+      .from('crm_contacts')
+      .select('*')
+      .in('id', batchIds);
+
+    if (error) {
+      contactsError = error.message;
+      break;
+    }
+    if (data) allContacts.push(...(data as CrmContact[]));
+  }
 
   if (contactsError) {
-    return NextResponse.json({ error: contactsError.message }, { status: 500 });
+    return NextResponse.json({ error: contactsError }, { status: 500 });
   }
 
-  if (!contacts || contacts.length === 0) {
-    return NextResponse.json({ error: 'No opted-in contacts found' }, { status: 400 });
+  if (allContacts.length === 0) {
+    return NextResponse.json({ error: 'Aucun contact trouve avec ces IDs' }, { status: 400 });
+  }
+
+  // Separate opted-in from opted-out for clear reporting
+  const optedInContacts = allContacts.filter((c) => c.opted_in);
+  const optedOutContacts = allContacts.filter((c) => !c.opted_in);
+
+  if (optedInContacts.length === 0) {
+    return NextResponse.json(
+      {
+        error: `Aucun contact n'a le opt-in actif. ${optedOutContacts.length} contact(s) ont le opt-in desactive.`,
+      },
+      { status: 400 }
+    );
   }
 
   // Create the campaign
   const { data: campaign, error: campaignError } = await supabase
     .from('bulk_campaigns')
     .insert({
-      name: campaignName || `Campaign ${new Date().toLocaleDateString('fr-FR')}`,
+      name: campaignName || `Campagne ${new Date().toLocaleDateString('fr-FR')}`,
       template_name: templateName,
       template_language: templateLanguage || 'fr',
       status: 'sending',
-      total_recipients: contacts.length,
+      total_recipients: optedInContacts.length,
     })
     .select()
     .single();
@@ -81,86 +92,81 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: campaignError.message }, { status: 500 });
   }
 
-  // Create recipient entries
-  const recipients = contacts.map((contact) => ({
+  // Create recipient entries for opted-in contacts only
+  const recipients = optedInContacts.map((contact) => ({
     campaign_id: campaign.id,
     contact_id: contact.id,
-    status: 'pending',
+    status: 'pending' as const,
   }));
 
-  await supabase.from('bulk_campaign_recipients').insert(recipients);
+  const { error: recipientInsertError } = await supabase
+    .from('bulk_campaign_recipients')
+    .insert(recipients);
 
-  // Send messages with rate limiting
-  const url = `https://graph.facebook.com/${WHATSAPP_API_VERSION}/${phoneNumberId}/messages`;
+  if (recipientInsertError) {
+    console.error('[BulkSend] Failed to insert recipients:', recipientInsertError);
+  }
+
+  // Send messages with rate limiting using the shared sendWhatsAppMessage function
   let sentCount = 0;
   let failedCount = 0;
-  const results: Array<{ contactId: string; phone: string; status: string; error?: string }> = [];
+  const results: Array<{ contactId: string; phone: string; firstname: string; status: string; error?: string }> = [];
 
-  for (const contact of contacts) {
-    try {
-      // Build template body, optionally replacing {{1}} with firstname
-      const components = templateComponents
-        ? JSON.parse(JSON.stringify(templateComponents)).map(
-            (comp: { type: string; parameters?: Array<{ type: string; text?: string }> }) => {
-              if (comp.parameters) {
-                comp.parameters = comp.parameters.map((param) => {
+  for (let i = 0; i < optedInContacts.length; i++) {
+    const contact = optedInContacts[i];
+    // Build template components, replacing {{firstname}} with actual name
+    const components = templateComponents
+      ? JSON.parse(JSON.stringify(templateComponents)).map(
+          (comp: { type: string; parameters?: Array<{ type: string; text?: string }> }) => {
+            if (comp.parameters) {
+              comp.parameters = comp.parameters.map(
+                (param: { type: string; text?: string }) => {
                   if (param.text === '{{firstname}}') {
                     return { ...param, text: contact.firstname };
                   }
                   return param;
-                });
-              }
-              return comp;
+                }
+              );
             }
-          )
-        : [];
+            return comp;
+          }
+        )
+      : [];
 
-      const messageBody = {
-        messaging_product: 'whatsapp',
-        to: contact.phone,
-        type: 'template',
-        template: {
-          name: templateName,
-          language: { code: templateLanguage || 'fr' },
-          components,
-        },
-      };
+    const sendResult = await sendWhatsAppMessage({
+      to: contact.phone,
+      message: '', // Not used for template messages
+      useTemplate: true,
+      templateName,
+      templateLanguage: templateLanguage || 'fr',
+      templateComponents: components.length > 0 ? components : undefined,
+    });
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(messageBody),
+    if (sendResult.success) {
+      sentCount++;
+      results.push({
+        contactId: contact.id,
+        phone: contact.phone,
+        firstname: contact.firstname,
+        status: 'sent',
       });
 
-      if (response.ok) {
-        sentCount++;
-        results.push({ contactId: contact.id, phone: contact.phone, status: 'sent' });
-
-        // Update recipient status
-        await supabase
-          .from('bulk_campaign_recipients')
-          .update({ status: 'sent', sent_at: new Date().toISOString() })
-          .eq('campaign_id', campaign.id)
-          .eq('contact_id', contact.id);
-      } else {
-        const errorData = await response.json().catch(() => ({}));
-        failedCount++;
-        const errorMsg = JSON.stringify(errorData);
-        results.push({ contactId: contact.id, phone: contact.phone, status: 'failed', error: errorMsg });
-
-        await supabase
-          .from('bulk_campaign_recipients')
-          .update({ status: 'failed', error: errorMsg })
-          .eq('campaign_id', campaign.id)
-          .eq('contact_id', contact.id);
-      }
-    } catch (err) {
+      // Update recipient status
+      await supabase
+        .from('bulk_campaign_recipients')
+        .update({ status: 'sent', sent_at: new Date().toISOString() })
+        .eq('campaign_id', campaign.id)
+        .eq('contact_id', contact.id);
+    } else {
       failedCount++;
-      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-      results.push({ contactId: contact.id, phone: contact.phone, status: 'failed', error: errorMsg });
+      const errorMsg = sendResult.error || 'Erreur inconnue';
+      results.push({
+        contactId: contact.id,
+        phone: contact.phone,
+        firstname: contact.firstname,
+        status: 'failed',
+        error: errorMsg,
+      });
 
       await supabase
         .from('bulk_campaign_recipients')
@@ -169,15 +175,17 @@ export async function POST(request: NextRequest) {
         .eq('contact_id', contact.id);
     }
 
-    // Rate limit: wait 100ms between messages (conservative)
-    await delay(100);
+    // Rate limit: wait 150ms between messages (conservative, WhatsApp recommends not exceeding 80/sec)
+    if (i < optedInContacts.length - 1) {
+      await delay(150);
+    }
   }
 
   // Update campaign final status
   await supabase
     .from('bulk_campaigns')
     .update({
-      status: failedCount === contacts.length ? 'failed' : 'completed',
+      status: failedCount === optedInContacts.length ? 'failed' : 'completed',
       sent_count: sentCount,
       failed_count: failedCount,
       updated_at: new Date().toISOString(),
@@ -187,9 +195,10 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({
     success: true,
     campaignId: campaign.id,
-    total: contacts.length,
+    total: optedInContacts.length,
     sent: sentCount,
     failed: failedCount,
+    skippedOptOut: optedOutContacts.length,
     results,
   });
 }
