@@ -7,9 +7,10 @@ import { ConversationsPanel } from "@/components/dashboard/conversations-panel";
 import { JobsPanel } from "@/components/dashboard/jobs-panel";
 import { LogsPanel } from "@/components/dashboard/logs-panel";
 import { StatusIndicator } from "@/components/dashboard/status-indicator";
+import { CrmPanel } from "@/components/crm/crm-panel";
 
 export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState("config");
+  const [activeTab, setActiveTab] = useState("crm");
 
   return (
     <main className="min-h-screen bg-background">
@@ -31,12 +32,17 @@ export default function Dashboard() {
 
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-4 lg:w-auto lg:inline-flex">
+          <TabsList className="grid w-full grid-cols-5 lg:w-auto lg:inline-flex">
+            <TabsTrigger value="crm">CRM</TabsTrigger>
             <TabsTrigger value="config">Configuration</TabsTrigger>
             <TabsTrigger value="conversations">Conversations</TabsTrigger>
             <TabsTrigger value="jobs">Jobs</TabsTrigger>
             <TabsTrigger value="logs">Logs</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="crm" className="space-y-4">
+            <CrmPanel />
+          </TabsContent>
 
           <TabsContent value="config" className="space-y-4">
             <ConfigPanel />
