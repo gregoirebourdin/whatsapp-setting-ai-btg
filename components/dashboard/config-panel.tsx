@@ -154,6 +154,35 @@ export function ConfigPanel() {
           </div>
 
           <div className="space-y-2">
+            <Label htmlFor="waba_id">Business Account ID (WABA ID)</Label>
+            <p className="text-xs text-muted-foreground">
+              Requis pour le CRM / Bulk DM. Trouvable dans Meta Business Manager &gt; WhatsApp Accounts &gt; Settings.
+            </p>
+            <div className="flex gap-2">
+              <Input
+                id="waba_id"
+                value={localValues.whatsapp_business_account_id || ""}
+                onChange={(e) => setLocalValues(prev => ({ ...prev, whatsapp_business_account_id: e.target.value }))}
+                placeholder="Ex: 123456789012345"
+              />
+              <Button
+                onClick={() => saveConfig("whatsapp_business_account_id", localValues.whatsapp_business_account_id || "")}
+                disabled={saving === "whatsapp_business_account_id"}
+                size="icon"
+                variant="outline"
+              >
+                {saving === "whatsapp_business_account_id" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : success === "whatsapp_business_account_id" ? (
+                  <Check className="h-4 w-4 text-green-600" />
+                ) : (
+                  <Check className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+          </div>
+
+          <div className="space-y-2">
             <Label htmlFor="verify_token">Webhook Verify Token</Label>
             <div className="flex gap-2">
               <Input
