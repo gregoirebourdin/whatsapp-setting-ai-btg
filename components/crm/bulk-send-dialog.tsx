@@ -134,7 +134,50 @@ export function BulkSendDialog({
     skippedOptOut?: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [step, setStep] = useState<"select" | "confirm" | "result">("select");
+  const [step, setStep] = useState<"select" | "variables" | "confirm" | "result">("select");
+
+  // Variable values per component type: { "HEADER": ["val1"], "BODY": ["val1", "val2"] }
+  const [variableValues, setVariableValues] = useState<Record<string, string[]>>({});
+
+  // Extract variables from a template component text like "Hello {{1}}, your order {{2}} is ready"
+  const extractVariables = useCallback((text?: string): number => {
+    if (!text) return 0;
+    const matches = text.match(/\{\{\d+\}\}/g);
+    return matches ? matches.length : 0;
+  }, []);
+
+  // Get all variable info for the selected template
+  const getTemplateVariables = useCallback(
+    (template: Template | null) => {
+      if (!template) return [];
+      const vars: Array<{
+        componentType: string;
+        varCount: number;
+        text: string;
+        examples: string[];
+      }> = [];
+      for (const comp of template.components) {
+        if (comp.type === "HEADER" || comp.type === "BODY") {
+          const count = extractVariables(comp.text);
+          if (count > 0) {
+            // Extract example values if available
+            const examples: string[] = [];
+            if (comp.example?.body_text?.[0]) {
+              examples.push(...comp.example.body_text[0]);
+            }
+            vars.push({
+              componentType: comp.type,
+              varCount: count,
+              text: comp.text || "",
+              examples,
+            });
+          }
+        }
+      }
+      return vars;
+    },
+    [extractVariables]
+  );
 
   // Reset when dialog opens
   useEffect(() => {
@@ -144,12 +187,53 @@ export function BulkSendDialog({
       setResult(null);
       setError(null);
       setStep("select");
+      setVariableValues({});
     }
   }, [open]);
+
+  // When a template is selected, pre-fill variable values
+  const initVariables = useCallback(
+    (template: Template) => {
+      const vars = getTemplateVariables(template);
+      const values: Record<string, string[]> = {};
+      for (const v of vars) {
+        values[v.componentType] = Array.from({ length: v.varCount }, (_, i) => {
+          // Use example values if available
+          if (v.examples[i]) return v.examples[i];
+          // Default: first body variable = {{firstname}} (will be replaced per contact)
+          if (v.componentType === "BODY" && i === 0) return "{{firstname}}";
+          return "";
+        });
+      }
+      setVariableValues(values);
+    },
+    [getTemplateVariables]
+  );
 
   const approvedTemplates = (templatesData?.templates || []).filter(
     (t) => t.status === "APPROVED"
   );
+
+  // Check if template has any variables that need filling
+  const templateVars = getTemplateVariables(selectedTemplate);
+  const hasVariables = templateVars.length > 0;
+
+  // Check if all required variables are filled
+  const allVariablesFilled = templateVars.every((v) => {
+    const vals = variableValues[v.componentType];
+    return vals && vals.every((val) => val.trim().length > 0);
+  });
+
+  // Proceed from template selection
+  const handleTemplateNext = useCallback(() => {
+    if (!selectedTemplate) return;
+    if (hasVariables) {
+      initVariables(selectedTemplate);
+      setStep("variables");
+    } else {
+      setStep("confirm");
+    }
+  }, [selectedTemplate, hasVariables, initVariables]);
 
   const handleSend = useCallback(async () => {
     if (!selectedTemplate) return;
@@ -158,19 +242,20 @@ export function BulkSendDialog({
     setError(null);
 
     try {
-      // Build template components for variables
-      const bodyComponent = selectedTemplate.components.find((c) => c.type === "BODY");
-      const hasFirstnameVar =
-        bodyComponent?.text?.includes("{{1}}") || bodyComponent?.text?.includes("{{firstname}}");
+      // Build template components from variable values
+      const templateComponents: Array<{
+        type: string;
+        parameters: Array<{ type: string; text: string }>;
+      }> = [];
 
-      const templateComponents = hasFirstnameVar
-        ? [
-            {
-              type: "body",
-              parameters: [{ type: "text", text: "{{firstname}}" }],
-            },
-          ]
-        : [];
+      for (const [componentType, values] of Object.entries(variableValues)) {
+        if (values.length > 0) {
+          templateComponents.push({
+            type: componentType.toLowerCase(),
+            parameters: values.map((text) => ({ type: "text", text })),
+          });
+        }
+      }
 
       const res = await fetch("/api/crm/bulk-send", {
         method: "POST",
@@ -179,7 +264,7 @@ export function BulkSendDialog({
           contactIds: selectedContactIds,
           templateName: selectedTemplate.name,
           templateLanguage: selectedTemplate.language,
-          templateComponents,
+          templateComponents: templateComponents.length > 0 ? templateComponents : undefined,
           campaignName: campaignName || undefined,
         }),
       });
@@ -203,7 +288,7 @@ export function BulkSendDialog({
     } finally {
       setSending(false);
     }
-  }, [selectedTemplate, selectedContactIds, campaignName, onSendComplete]);
+  }, [selectedTemplate, selectedContactIds, campaignName, variableValues, onSendComplete]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -211,12 +296,15 @@ export function BulkSendDialog({
         <DialogHeader>
           <DialogTitle>
             {step === "select" && "Choisir un template"}
+            {step === "variables" && "Remplir les variables"}
             {step === "confirm" && "Confirmer l'envoi"}
             {step === "result" && "Resultat de l'envoi"}
           </DialogTitle>
           <DialogDescription>
             {step === "select" &&
               `Selectionnez un template WhatsApp approuve pour envoyer un message a ${selectedContactsCount} contact${selectedContactsCount > 1 ? "s" : ""}.`}
+            {step === "variables" &&
+              "Ce template utilise des variables dynamiques. Remplissez-les avant d'envoyer."}
             {step === "confirm" &&
               "Verifiez les details avant de lancer l'envoi en masse."}
             {step === "result" && "Voici le resume de votre campagne."}
@@ -373,7 +461,90 @@ export function BulkSendDialog({
             </>
           )}
 
-          {/* Step 2: Confirm */}
+          {/* Step 2: Variables */}
+          {step === "variables" && selectedTemplate && (
+            <div className="space-y-4">
+              <Alert>
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription className="text-sm">
+                  Ce template contient des variables. Remplissez les valeurs ci-dessous.
+                  Utilisez <code className="rounded bg-secondary px-1 py-0.5 text-xs font-mono">{"{{firstname}}"}</code>{" "}
+                  pour inserer automatiquement le prenom de chaque contact.
+                </AlertDescription>
+              </Alert>
+
+              {templateVars.map((v) => (
+                <div key={v.componentType} className="space-y-3">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-foreground">
+                      {v.componentType === "HEADER" ? "En-tete" : "Corps du message"}
+                    </p>
+                    <p className="rounded-lg border border-border bg-secondary/30 p-3 text-xs text-muted-foreground leading-relaxed">
+                      {v.text}
+                    </p>
+                  </div>
+                  {Array.from({ length: v.varCount }, (_, i) => (
+                    <div key={i} className="space-y-1.5">
+                      <Label className="text-sm">
+                        Variable{" "}
+                        <code className="rounded bg-secondary px-1 py-0.5 text-xs font-mono">
+                          {`{{${i + 1}}}`}
+                        </code>
+                        {v.examples[i] && (
+                          <span className="ml-2 text-muted-foreground font-normal">
+                            (ex: {v.examples[i]})
+                          </span>
+                        )}
+                      </Label>
+                      <Input
+                        value={variableValues[v.componentType]?.[i] || ""}
+                        onChange={(e) => {
+                          setVariableValues((prev) => {
+                            const updated = { ...prev };
+                            const arr = [...(updated[v.componentType] || [])];
+                            arr[i] = e.target.value;
+                            updated[v.componentType] = arr;
+                            return updated;
+                          });
+                        }}
+                        placeholder={
+                          v.componentType === "BODY" && i === 0
+                            ? "{{firstname}} = prenom du contact"
+                            : `Valeur pour {{${i + 1}}}`
+                        }
+                      />
+                      {variableValues[v.componentType]?.[i] === "{{firstname}}" && (
+                        <p className="text-xs text-emerald-600">
+                          Sera remplace par le prenom de chaque contact automatiquement.
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ))}
+
+              {/* Preview with variables filled */}
+              {selectedTemplate.components.some((c) => c.type === "BODY" && c.text) && (
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">Apercu du message :</p>
+                  <div className="rounded-lg border border-border bg-secondary/30 p-3 text-sm text-foreground leading-relaxed">
+                    {(() => {
+                      const bodyComp = selectedTemplate.components.find((c) => c.type === "BODY");
+                      let preview = bodyComp?.text || "";
+                      const bodyVals = variableValues["BODY"] || [];
+                      bodyVals.forEach((val, i) => {
+                        const display = val === "{{firstname}}" ? "Jean" : val || `{{${i + 1}}}`;
+                        preview = preview.replace(`{{${i + 1}}}`, display);
+                      });
+                      return preview;
+                    })()}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Step 3: Confirm */}
           {step === "confirm" && selectedTemplate && (
             <div className="space-y-4">
               <div className="rounded-lg border border-border bg-secondary/30 p-4">
@@ -403,6 +574,19 @@ export function BulkSendDialog({
                       {selectedContactsCount} contact{selectedContactsCount > 1 ? "s" : ""}
                     </span>
                   </div>
+                  {Object.entries(variableValues).map(([compType, vals]) =>
+                    vals.map((val, i) => (
+                      <div key={`${compType}-${i}`} className="flex justify-between">
+                        <span>
+                          {compType === "HEADER" ? "En-tete" : "Corps"}{" "}
+                          <code className="text-xs font-mono">{`{{${i + 1}}}`}</code>
+                        </span>
+                        <span className="font-medium text-foreground max-w-[200px] truncate">
+                          {val === "{{firstname}}" ? "Prenom du contact" : val}
+                        </span>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
 
@@ -489,8 +673,22 @@ export function BulkSendDialog({
                 Annuler
               </Button>
               <Button
-                onClick={() => setStep("confirm")}
+                onClick={handleTemplateNext}
                 disabled={!selectedTemplate}
+                className="gap-2"
+              >
+                Continuer
+              </Button>
+            </>
+          )}
+          {step === "variables" && (
+            <>
+              <Button variant="outline" onClick={() => setStep("select")}>
+                Retour
+              </Button>
+              <Button
+                onClick={() => setStep("confirm")}
+                disabled={!allVariablesFilled}
                 className="gap-2"
               >
                 Continuer
@@ -499,7 +697,7 @@ export function BulkSendDialog({
           )}
           {step === "confirm" && (
             <>
-              <Button variant="outline" onClick={() => setStep("select")}>
+              <Button variant="outline" onClick={() => setStep(hasVariables ? "variables" : "select")}>
                 Retour
               </Button>
               <Button onClick={handleSend} disabled={sending} className="gap-2">
