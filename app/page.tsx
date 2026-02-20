@@ -8,11 +8,13 @@ import { JobsPanel } from "@/components/dashboard/jobs-panel";
 import { LogsPanel } from "@/components/dashboard/logs-panel";
 import { StatusIndicator } from "@/components/dashboard/status-indicator";
 import { CrmPanel } from "@/components/crm/crm-panel";
+import { AuthGate } from "@/components/auth-gate";
 
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("crm");
 
   return (
+    <AuthGate>
     <main className="min-h-screen bg-background">
       <header className="border-b border-border bg-card">
         <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
@@ -62,5 +64,6 @@ export default function Dashboard() {
         </Tabs>
       </div>
     </main>
+    </AuthGate>
   );
 }
