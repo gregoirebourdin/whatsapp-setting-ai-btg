@@ -37,6 +37,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   XCircle,
+  RefreshCw,
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { CsvImportDialog } from "./csv-import-dialog";
@@ -110,6 +111,8 @@ export function CrmPanel() {
   const [deleting, setDeleting] = useState(false);
   const [activeView, setActiveView] = useState<"contacts" | "campaigns">("contacts");
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [retryResult, setRetryResult] = useState<{ sent: number; failed: number; retried: number } | null>(null);
 
   const {
     data: contactsData,
@@ -144,7 +147,7 @@ export function CrmPanel() {
     recipients: CampaignRecipient[];
   }
 
-  const { data: campaignDetail, isLoading: campaignDetailLoading } =
+  const { data: campaignDetail, isLoading: campaignDetailLoading, mutate: refreshCampaignDetail } =
     useSWR<CampaignDetailResponse>(
       selectedCampaignId ? `/api/crm/campaigns/${selectedCampaignId}` : null,
       fetcher
@@ -644,7 +647,7 @@ export function CrmPanel() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => setSelectedCampaignId(null)}
+                onClick={() => { setSelectedCampaignId(null); setRetryResult(null); }}
                 className="gap-1.5"
               >
                 <ArrowLeft className="h-4 w-4" />
@@ -696,6 +699,81 @@ export function CrmPanel() {
                     <p className="text-xs text-muted-foreground">Echoues</p>
                   </div>
                 </div>
+
+                {/* Pending contacts count + retry button */}
+                {(() => {
+                  const pendingCount = campaignDetail.recipients.filter(
+                    (r) => r.status === "pending" || r.status === "failed"
+                  ).length;
+                  const pendingOnly = campaignDetail.recipients.filter((r) => r.status === "pending").length;
+                  const failedOnly = campaignDetail.recipients.filter((r) => r.status === "failed").length;
+
+                  if (pendingCount === 0 && !retryResult) return null;
+
+                  return (
+                    <div className="space-y-3">
+                      {pendingCount > 0 && (
+                        <div className="flex flex-col gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="space-y-1">
+                            <p className="text-sm font-medium text-foreground">
+                              {pendingCount} contact{pendingCount > 1 ? "s" : ""} non contacte{pendingCount > 1 ? "s" : ""}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {pendingOnly > 0 && `${pendingOnly} en attente`}
+                              {pendingOnly > 0 && failedOnly > 0 && " / "}
+                              {failedOnly > 0 && `${failedOnly} echoue${failedOnly > 1 ? "s" : ""}`}
+                            </p>
+                          </div>
+                          <Button
+                            size="sm"
+                            className="gap-2"
+                            onClick={async () => {
+                              setRetrying(true);
+                              setRetryResult(null);
+                              try {
+                                const res = await fetch(`/api/crm/campaigns/${selectedCampaignId}/retry`, {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ statuses: ["pending", "failed"] }),
+                                });
+                                const data = await res.json();
+                                if (res.ok) {
+                                  setRetryResult(data);
+                                  refreshCampaignDetail();
+                                  refreshCampaigns();
+                                } else {
+                                  setRetryResult({ sent: 0, failed: 0, retried: 0 });
+                                }
+                              } catch {
+                                setRetryResult({ sent: 0, failed: 0, retried: 0 });
+                              } finally {
+                                setRetrying(false);
+                              }
+                            }}
+                            disabled={retrying}
+                          >
+                            {retrying ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-4 w-4" />
+                            )}
+                            {retrying ? "Envoi en cours..." : "Contacter les contacts en attente"}
+                          </Button>
+                        </div>
+                      )}
+
+                      {retryResult && (
+                        <Alert className={retryResult.sent > 0 ? "border-emerald-500/30 bg-emerald-500/5" : "border-red-500/30 bg-red-500/5"}>
+                          <CheckCircle2 className="h-4 w-4" />
+                          <AlertDescription className="text-sm">
+                            Relance terminee : {retryResult.sent} envoye{retryResult.sent > 1 ? "s" : ""} sur {retryResult.retried} tentative{retryResult.retried > 1 ? "s" : ""}
+                            {retryResult.failed > 0 && `, ${retryResult.failed} echoue${retryResult.failed > 1 ? "s" : ""}`}.
+                          </AlertDescription>
+                        </Alert>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Recipients table */}
                 <div className="rounded-lg border border-border">
