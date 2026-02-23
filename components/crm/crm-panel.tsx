@@ -37,6 +37,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   XCircle,
+  RefreshCw,
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { CsvImportDialog } from "./csv-import-dialog";
@@ -110,6 +111,7 @@ export function CrmPanel() {
   const [deleting, setDeleting] = useState(false);
   const [activeView, setActiveView] = useState<"contacts" | "campaigns">("contacts");
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
+  const [retryContactIds, setRetryContactIds] = useState<string[]>([]);
 
   const {
     data: contactsData,
@@ -144,7 +146,7 @@ export function CrmPanel() {
     recipients: CampaignRecipient[];
   }
 
-  const { data: campaignDetail, isLoading: campaignDetailLoading } =
+  const { data: campaignDetail, isLoading: campaignDetailLoading, mutate: refreshCampaignDetail } =
     useSWR<CampaignDetailResponse>(
       selectedCampaignId ? `/api/crm/campaigns/${selectedCampaignId}` : null,
       fetcher
@@ -697,6 +699,46 @@ export function CrmPanel() {
                   </div>
                 </div>
 
+                {/* Pending contacts - retry via BulkSendDialog */}
+                {(() => {
+                  const pendingRecipients = campaignDetail.recipients.filter(
+                    (r) => r.status === "pending" || r.status === "failed"
+                  );
+                  const pendingOnly = pendingRecipients.filter((r) => r.status === "pending").length;
+                  const failedOnly = pendingRecipients.filter((r) => r.status === "failed").length;
+
+                  if (pendingRecipients.length === 0) return null;
+
+                  return (
+                    <div className="flex flex-col gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium text-foreground">
+                          {pendingRecipients.length} contact{pendingRecipients.length > 1 ? "s" : ""} non contacte{pendingRecipients.length > 1 ? "s" : ""}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {pendingOnly > 0 && `${pendingOnly} en attente`}
+                          {pendingOnly > 0 && failedOnly > 0 && " / "}
+                          {failedOnly > 0 && `${failedOnly} echoue${failedOnly > 1 ? "s" : ""}`}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        className="gap-2"
+                        onClick={() => {
+                          const ids = pendingRecipients
+                            .map((r) => r.contact?.id)
+                            .filter((id): id is string => !!id);
+                          setRetryContactIds(ids);
+                          setBulkDialogOpen(true);
+                        }}
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                        Contacter les contacts en attente
+                      </Button>
+                    </div>
+                  );
+                })()}
+
                 {/* Recipients table */}
                 <div className="rounded-lg border border-border">
                   <Table>
@@ -770,13 +812,18 @@ export function CrmPanel() {
       {/* Bulk Send Dialog */}
       <BulkSendDialog
         open={bulkDialogOpen}
-        onOpenChange={setBulkDialogOpen}
-        selectedContactIds={Array.from(selectedIds)}
-        selectedContactsCount={selectedIds.size}
+        onOpenChange={(open) => {
+          setBulkDialogOpen(open);
+          if (!open) setRetryContactIds([]);
+        }}
+        selectedContactIds={retryContactIds.length > 0 ? retryContactIds : Array.from(selectedIds)}
+        selectedContactsCount={retryContactIds.length > 0 ? retryContactIds.length : selectedIds.size}
         onSendComplete={() => {
           refreshContacts();
           refreshCampaigns();
+          refreshCampaignDetail();
           setSelectedIds(new Set());
+          setRetryContactIds([]);
         }}
       />
     </div>
