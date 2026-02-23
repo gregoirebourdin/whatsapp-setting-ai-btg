@@ -111,8 +111,7 @@ export function CrmPanel() {
   const [deleting, setDeleting] = useState(false);
   const [activeView, setActiveView] = useState<"contacts" | "campaigns">("contacts");
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
-  const [retrying, setRetrying] = useState(false);
-  const [retryResult, setRetryResult] = useState<{ sent: number; failed: number; retried: number } | null>(null);
+  const [retryContactIds, setRetryContactIds] = useState<string[]>([]);
 
   const {
     data: contactsData,
@@ -647,7 +646,7 @@ export function CrmPanel() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => { setSelectedCampaignId(null); setRetryResult(null); }}
+                onClick={() => setSelectedCampaignId(null)}
                 className="gap-1.5"
               >
                 <ArrowLeft className="h-4 w-4" />
@@ -700,77 +699,42 @@ export function CrmPanel() {
                   </div>
                 </div>
 
-                {/* Pending contacts count + retry button */}
+                {/* Pending contacts - retry via BulkSendDialog */}
                 {(() => {
-                  const pendingCount = campaignDetail.recipients.filter(
+                  const pendingRecipients = campaignDetail.recipients.filter(
                     (r) => r.status === "pending" || r.status === "failed"
-                  ).length;
-                  const pendingOnly = campaignDetail.recipients.filter((r) => r.status === "pending").length;
-                  const failedOnly = campaignDetail.recipients.filter((r) => r.status === "failed").length;
+                  );
+                  const pendingOnly = pendingRecipients.filter((r) => r.status === "pending").length;
+                  const failedOnly = pendingRecipients.filter((r) => r.status === "failed").length;
 
-                  if (pendingCount === 0 && !retryResult) return null;
+                  if (pendingRecipients.length === 0) return null;
 
                   return (
-                    <div className="space-y-3">
-                      {pendingCount > 0 && (
-                        <div className="flex flex-col gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 sm:flex-row sm:items-center sm:justify-between">
-                          <div className="space-y-1">
-                            <p className="text-sm font-medium text-foreground">
-                              {pendingCount} contact{pendingCount > 1 ? "s" : ""} non contacte{pendingCount > 1 ? "s" : ""}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              {pendingOnly > 0 && `${pendingOnly} en attente`}
-                              {pendingOnly > 0 && failedOnly > 0 && " / "}
-                              {failedOnly > 0 && `${failedOnly} echoue${failedOnly > 1 ? "s" : ""}`}
-                            </p>
-                          </div>
-                          <Button
-                            size="sm"
-                            className="gap-2"
-                            onClick={async () => {
-                              setRetrying(true);
-                              setRetryResult(null);
-                              try {
-                                const res = await fetch(`/api/crm/campaigns/${selectedCampaignId}/retry`, {
-                                  method: "POST",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ statuses: ["pending", "failed"] }),
-                                });
-                                const data = await res.json();
-                                if (res.ok) {
-                                  setRetryResult(data);
-                                  refreshCampaignDetail();
-                                  refreshCampaigns();
-                                } else {
-                                  setRetryResult({ sent: 0, failed: 0, retried: 0 });
-                                }
-                              } catch {
-                                setRetryResult({ sent: 0, failed: 0, retried: 0 });
-                              } finally {
-                                setRetrying(false);
-                              }
-                            }}
-                            disabled={retrying}
-                          >
-                            {retrying ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <RefreshCw className="h-4 w-4" />
-                            )}
-                            {retrying ? "Envoi en cours..." : "Contacter les contacts en attente"}
-                          </Button>
-                        </div>
-                      )}
-
-                      {retryResult && (
-                        <Alert className={retryResult.sent > 0 ? "border-emerald-500/30 bg-emerald-500/5" : "border-red-500/30 bg-red-500/5"}>
-                          <CheckCircle2 className="h-4 w-4" />
-                          <AlertDescription className="text-sm">
-                            Relance terminee : {retryResult.sent} envoye{retryResult.sent > 1 ? "s" : ""} sur {retryResult.retried} tentative{retryResult.retried > 1 ? "s" : ""}
-                            {retryResult.failed > 0 && `, ${retryResult.failed} echoue${retryResult.failed > 1 ? "s" : ""}`}.
-                          </AlertDescription>
-                        </Alert>
-                      )}
+                    <div className="flex flex-col gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium text-foreground">
+                          {pendingRecipients.length} contact{pendingRecipients.length > 1 ? "s" : ""} non contacte{pendingRecipients.length > 1 ? "s" : ""}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {pendingOnly > 0 && `${pendingOnly} en attente`}
+                          {pendingOnly > 0 && failedOnly > 0 && " / "}
+                          {failedOnly > 0 && `${failedOnly} echoue${failedOnly > 1 ? "s" : ""}`}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        className="gap-2"
+                        onClick={() => {
+                          const ids = pendingRecipients
+                            .map((r) => r.contact?.id)
+                            .filter((id): id is string => !!id);
+                          setRetryContactIds(ids);
+                          setBulkDialogOpen(true);
+                        }}
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                        Contacter les contacts en attente
+                      </Button>
                     </div>
                   );
                 })()}
@@ -848,13 +812,18 @@ export function CrmPanel() {
       {/* Bulk Send Dialog */}
       <BulkSendDialog
         open={bulkDialogOpen}
-        onOpenChange={setBulkDialogOpen}
-        selectedContactIds={Array.from(selectedIds)}
-        selectedContactsCount={selectedIds.size}
+        onOpenChange={(open) => {
+          setBulkDialogOpen(open);
+          if (!open) setRetryContactIds([]);
+        }}
+        selectedContactIds={retryContactIds.length > 0 ? retryContactIds : Array.from(selectedIds)}
+        selectedContactsCount={retryContactIds.length > 0 ? retryContactIds.length : selectedIds.size}
         onSendComplete={() => {
           refreshContacts();
           refreshCampaigns();
+          refreshCampaignDetail();
           setSelectedIds(new Set());
+          setRetryContactIds([]);
         }}
       />
     </div>
