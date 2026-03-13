@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 
 // Use env var or fallback - the password is NEVER sent to the client
-const ACCESS_PASSWORD = process.env.DASHBOARD_PASSWORD || '270738';
+const ACCESS_PASSWORD = process.env.DASHBOARD_PASSWORD || '230695';
 const SESSION_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
 // Secret key for signing tokens - generated at startup, rotates on redeploy
