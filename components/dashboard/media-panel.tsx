@@ -76,16 +76,42 @@ function getMediaColor(mediaType: string) {
 
 export function MediaPanel() {
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedMedia[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Config for direct upload
+  const [config, setConfig] = useState<{ phoneNumberId: string; accessToken: string } | null>(null);
+  const [configLoading, setConfigLoading] = useState(true);
+
   // Templates with media
   const [templatesWithMedia, setTemplatesWithMedia] = useState<TemplateWithMedia[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
+
+  // Load config on mount
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        const res = await fetch("/api/config");
+        const data = await res.json();
+        if (data.config) {
+          setConfig({
+            phoneNumberId: data.config.whatsapp_phone_number_id || "",
+            accessToken: data.config.whatsapp_access_token || "",
+          });
+        }
+      } catch {
+        console.error("Failed to load config");
+      } finally {
+        setConfigLoading(false);
+      }
+    };
+    loadConfig();
+  }, []);
 
   const fetchTemplatesWithMedia = useCallback(async () => {
     setLoadingTemplates(true);
@@ -137,59 +163,107 @@ export function MediaPanel() {
     fetchTemplatesWithMedia();
   }, [fetchTemplatesWithMedia]);
 
+  // Helper to get media type from MIME
+  const getMediaTypeFromMime = (mimeType: string): string => {
+    if (mimeType.startsWith("image/")) return "image";
+    if (mimeType.startsWith("video/")) return "video";
+    if (mimeType.startsWith("audio/")) return "audio";
+    return "document";
+  };
+
   const handleUpload = useCallback(async (file: File) => {
-    // Vercel limit is 4.5MB
-    const VERCEL_LIMIT = 4.5 * 1024 * 1024;
-    if (file.size > VERCEL_LIMIT) {
-      setError(
-        `Fichier trop volumineux (${formatFileSize(file.size)}). ` +
-        `Limite: 4.5 MB. Pour les gros fichiers, creez directement votre template ` +
-        `sur Meta Business Suite avec le media integre.`
-      );
+    // Check config
+    if (!config?.phoneNumberId || !config?.accessToken) {
+      setError("Configuration manquante. Ajoutez votre Phone Number ID et Access Token dans l'onglet Configuration.");
+      return;
+    }
+
+    // Max 100MB for WhatsApp
+    const MAX_SIZE = 100 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      setError(`Fichier trop volumineux (${formatFileSize(file.size)}). Maximum 100 MB.`);
       return;
     }
 
     setUploading(true);
     setError(null);
+    setUploadProgress(0);
 
     try {
+      // Direct upload to Meta Graph API from browser
       const formData = new FormData();
+      formData.append("messaging_product", "whatsapp");
       formData.append("file", file);
+      formData.append("type", file.type);
 
-      const res = await fetch("/api/media/upload", {
-        method: "POST",
-        body: formData,
+      const xhr = new XMLHttpRequest();
+      
+      // Track progress
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const percent = Math.round((e.loaded / e.total) * 100);
+          setUploadProgress(percent);
+        }
+      };
+
+      const uploadPromise = new Promise<{ id: string }>((resolve, reject) => {
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              const response = JSON.parse(xhr.responseText);
+              if (response.id) {
+                resolve(response);
+              } else if (response.error) {
+                reject(new Error(response.error.message || "Upload failed"));
+              } else {
+                reject(new Error("No media ID in response"));
+              }
+            } catch {
+              reject(new Error("Invalid JSON response"));
+            }
+          } else {
+            try {
+              const errorResponse = JSON.parse(xhr.responseText);
+              reject(new Error(errorResponse.error?.message || `HTTP ${xhr.status}`));
+            } catch {
+              reject(new Error(`HTTP ${xhr.status}: ${xhr.statusText}`));
+            }
+          }
+        };
+        xhr.onerror = () => reject(new Error("Network error"));
+        xhr.ontimeout = () => reject(new Error("Timeout"));
       });
 
-      const contentType = res.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-        const text = await res.text();
-        setError(`Erreur serveur: ${text.slice(0, 100)}`);
-        return;
-      }
+      xhr.open("POST", `https://graph.facebook.com/v18.0/${config.phoneNumberId}/media`);
+      xhr.setRequestHeader("Authorization", `Bearer ${config.accessToken}`);
+      xhr.timeout = 300000; // 5 minutes timeout
+      xhr.send(formData);
 
-      const data = await res.json();
+      const response = await uploadPromise;
 
-      if (res.ok && data.success) {
-        const newMedia: UploadedMedia = {
-          id: crypto.randomUUID(),
-          mediaId: data.mediaId,
-          fileName: data.fileName,
-          fileSize: data.fileSize,
-          fileType: data.fileType,
-          mediaType: data.mediaType,
-          uploadedAt: new Date(),
-        };
-        setUploadedFiles((prev) => [newMedia, ...prev]);
-      } else {
-        setError(data.error || "Erreur lors de l'upload");
-      }
+      const newMedia: UploadedMedia = {
+        id: crypto.randomUUID(),
+        mediaId: response.id,
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type,
+        mediaType: getMediaTypeFromMime(file.type),
+        uploadedAt: new Date(),
+      };
+      setUploadedFiles((prev) => [newMedia, ...prev]);
+      setUploadProgress(100);
+
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur reseau");
+      if (err instanceof Error && err.message.includes("Failed to fetch")) {
+        setError("CORS bloque par Meta. Utilisez la commande cURL ci-dessous pour uploader.");
+      } else {
+        setError(err instanceof Error ? err.message : "Erreur reseau");
+      }
     } finally {
       setUploading(false);
+      setTimeout(() => setUploadProgress(0), 1000);
     }
-  }, []);
+  }, [config]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -258,8 +332,8 @@ export function MediaPanel() {
         <CardHeader>
           <CardTitle>Upload de media</CardTitle>
           <CardDescription>
-            Uploadez des fichiers vers WhatsApp pour obtenir leur Media ID (max 4.5 MB).
-            Pour les fichiers plus gros, creez le template directement sur Meta Business Suite.
+            Uploadez des fichiers vers WhatsApp pour obtenir leur Media ID (jusqu'a 100 MB).
+            L'upload se fait directement vers Meta depuis votre navigateur.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -285,9 +359,19 @@ export function MediaPanel() {
             />
 
             {uploading ? (
-              <div className="flex flex-col items-center gap-3">
+              <div className="flex flex-col items-center gap-3 w-full max-w-xs">
                 <Loader2 className="h-10 w-10 animate-spin text-primary" />
-                <p className="text-sm text-muted-foreground">Upload en cours...</p>
+                <p className="text-sm text-muted-foreground">
+                  Upload direct vers Meta... {uploadProgress > 0 ? `${uploadProgress}%` : ""}
+                </p>
+                {uploadProgress > 0 && (
+                  <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-primary transition-all duration-300"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+                )}
               </div>
             ) : (
               <>
@@ -299,7 +383,7 @@ export function MediaPanel() {
                     Glissez un fichier ici ou cliquez pour selectionner
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Images, Videos, Audio, Documents - Max 4.5 MB
+                    Images, Videos, Audio, Documents - Max 100 MB
                   </p>
                 </div>
               </>
@@ -533,21 +617,28 @@ export function MediaPanel() {
         </CardContent>
       </Card>
 
-      {/* Info card */}
+      {/* Info card - cURL fallback */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Pour les gros fichiers (&gt;4.5 MB)</CardTitle>
+          <CardTitle className="text-base">Alternative : Upload via cURL</CardTitle>
+          <CardDescription>
+            Si l'upload direct ne fonctionne pas (CORS), utilisez cette commande dans votre terminal.
+          </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3 text-sm text-muted-foreground">
-          <p>
-            Creez directement votre template avec le media sur <strong className="text-foreground">Meta Business Suite</strong> :
+        <CardContent className="space-y-3">
+          <div className="rounded-lg bg-secondary p-3 font-mono text-xs overflow-x-auto">
+            <pre className="whitespace-pre-wrap break-all">
+{`curl -X POST "https://graph.facebook.com/v18.0/${config?.phoneNumberId || "PHONE_NUMBER_ID"}/media" \\
+  -H "Authorization: Bearer ${config?.accessToken ? config.accessToken.slice(0, 20) + "..." : "ACCESS_TOKEN"}" \\
+  -F "messaging_product=whatsapp" \\
+  -F "file=@/chemin/vers/fichier.mp4" \\
+  -F "type=video/mp4"`}
+            </pre>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Remplacez <code className="rounded bg-secondary px-1 py-0.5">/chemin/vers/fichier.mp4</code> par le chemin de votre fichier
+            et <code className="rounded bg-secondary px-1 py-0.5">type=video/mp4</code> par le bon MIME type.
           </p>
-          <ol className="list-decimal list-inside space-y-1 ml-2">
-            <li>Allez sur <code className="rounded bg-secondary px-1 py-0.5 text-xs">business.facebook.com</code></li>
-            <li>WhatsApp Manager → Outils de compte → Templates</li>
-            <li>Creez un template avec Header de type Media</li>
-            <li>Le media sera integre directement dans le template</li>
-          </ol>
           <Alert className="mt-4">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription className="text-sm">
