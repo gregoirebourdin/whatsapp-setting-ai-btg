@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -21,7 +21,16 @@ import {
   Film,
   Music,
   File,
+  RefreshCw,
 } from "lucide-react";
+
+interface TemplateWithMedia {
+  name: string;
+  status: string;
+  language: string;
+  headerFormat: string;
+  headerHandle: string;
+}
 
 interface UploadedMedia {
   id: string;
@@ -72,6 +81,61 @@ export function MediaPanel() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Templates with media
+  const [templatesWithMedia, setTemplatesWithMedia] = useState<TemplateWithMedia[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
+
+  const fetchTemplatesWithMedia = useCallback(async () => {
+    setLoadingTemplates(true);
+    setTemplatesError(null);
+
+    try {
+      const res = await fetch("/api/crm/templates");
+      const data = await res.json();
+
+      if (data.error) {
+        setTemplatesError(data.error);
+        return;
+      }
+
+      // Filter templates that have media headers
+      const mediaTemplates: TemplateWithMedia[] = [];
+      
+      for (const template of data.templates || []) {
+        const headerComp = template.components?.find(
+          (c: { type: string }) => c.type === "HEADER"
+        );
+        
+        if (headerComp && ["IMAGE", "VIDEO", "DOCUMENT"].includes(headerComp.format)) {
+          // Get the header handle from example
+          const headerHandle = headerComp.example?.header_handle?.[0] || null;
+          
+          if (headerHandle) {
+            mediaTemplates.push({
+              name: template.name,
+              status: template.status,
+              language: template.language,
+              headerFormat: headerComp.format,
+              headerHandle,
+            });
+          }
+        }
+      }
+
+      setTemplatesWithMedia(mediaTemplates);
+    } catch (err) {
+      setTemplatesError(err instanceof Error ? err.message : "Erreur reseau");
+    } finally {
+      setLoadingTemplates(false);
+    }
+  }, []);
+
+  // Load templates on mount
+  useEffect(() => {
+    fetchTemplatesWithMedia();
+  }, [fetchTemplatesWithMedia]);
 
   const handleUpload = useCallback(async (file: File) => {
     // Vercel limit is 4.5MB
@@ -347,6 +411,129 @@ export function MediaPanel() {
           </CardContent>
         </Card>
       )}
+
+      {/* Templates with media */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>Media des templates</CardTitle>
+              <CardDescription>
+                Recuperez les Media Handles de vos templates qui ont un header media.
+              </CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={fetchTemplatesWithMedia}
+              disabled={loadingTemplates}
+              className="gap-2"
+            >
+              {loadingTemplates ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              Actualiser
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {templatesError && (
+            <Alert variant="destructive" className="mb-4">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{templatesError}</AlertDescription>
+            </Alert>
+          )}
+
+          {loadingTemplates && templatesWithMedia.length === 0 && (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          )}
+
+          {!loadingTemplates && templatesWithMedia.length === 0 && !templatesError && (
+            <div className="flex flex-col items-center justify-center gap-3 py-8 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary">
+                <FileImage className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-foreground">Aucun template avec media</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Creez un template avec un header Image/Video/Document sur Meta Business Suite.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {templatesWithMedia.length > 0 && (
+            <ScrollArea className="max-h-[300px]">
+              <div className="space-y-3">
+                {templatesWithMedia.map((template) => (
+                  <div
+                    key={`${template.name}-${template.language}`}
+                    className="flex flex-col gap-3 rounded-lg border border-border p-4 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`flex h-10 w-10 items-center justify-center rounded-lg border ${
+                        template.headerFormat === "IMAGE" 
+                          ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
+                          : template.headerFormat === "VIDEO"
+                          ? "bg-purple-500/10 text-purple-600 border-purple-500/20"
+                          : "bg-blue-500/10 text-blue-600 border-blue-500/20"
+                      }`}>
+                        {template.headerFormat === "IMAGE" && <Image className="h-5 w-5" />}
+                        {template.headerFormat === "VIDEO" && <Film className="h-5 w-5" />}
+                        {template.headerFormat === "DOCUMENT" && <File className="h-5 w-5" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-foreground">
+                          {template.name}
+                        </p>
+                        <div className="mt-0.5 flex items-center gap-2">
+                          <Badge 
+                            variant="secondary" 
+                            className={`text-xs ${
+                              template.status === "APPROVED" 
+                                ? "bg-emerald-500/10 text-emerald-600" 
+                                : "bg-amber-500/10 text-amber-600"
+                            }`}
+                          >
+                            {template.status}
+                          </Badge>
+                          <span className="text-xs text-muted-foreground">
+                            {template.language} - {template.headerFormat}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 max-w-[200px] sm:max-w-[300px]">
+                        <code className="text-xs font-mono text-foreground truncate">
+                          {template.headerHandle}
+                        </code>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0 flex-shrink-0"
+                          onClick={() => copyToClipboard(template.headerHandle)}
+                        >
+                          {copiedId === template.headerHandle ? (
+                            <Check className="h-3.5 w-3.5 text-emerald-600" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Info card */}
       <Card>
