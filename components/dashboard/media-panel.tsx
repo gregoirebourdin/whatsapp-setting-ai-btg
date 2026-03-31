@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Progress } from "@/components/ui/progress";
 import {
   Upload,
   FileImage,
@@ -68,123 +67,24 @@ function getMediaColor(mediaType: string) {
 
 export function MediaPanel() {
   const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<number>(0);
-  const [uploadStatus, setUploadStatus] = useState<string>("");
   const [uploadedFiles, setUploadedFiles] = useState<UploadedMedia[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB chunks (under Vercel limit)
-  const VERCEL_LIMIT = 4.5 * 1024 * 1024; // 4.5MB
-
-  // Chunked upload for large files
-  const handleChunkedUpload = useCallback(async (file: File) => {
-    setUploading(true);
-    setError(null);
-    setUploadProgress(0);
-    setUploadStatus("Creation de la session d'upload...");
-
-    try {
-      // Step 1: Create upload session
-      const sessionRes = await fetch("/api/media/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileName: file.name,
-          fileSize: file.size,
-          fileType: file.type,
-        }),
-      });
-
-      const sessionData = await sessionRes.json();
-
-      if (!sessionRes.ok || !sessionData.success) {
-        setError(sessionData.error || "Failed to create upload session");
-        return;
-      }
-
-      const { sessionId } = sessionData;
-      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-      let offset = 0;
-      let fileHandle = null;
-
-      // Step 2: Upload chunks
-      for (let i = 0; i < totalChunks; i++) {
-        const chunk = file.slice(offset, offset + CHUNK_SIZE);
-        setUploadStatus(`Upload chunk ${i + 1}/${totalChunks}...`);
-        setUploadProgress(Math.round(((i + 1) / totalChunks) * 100));
-
-        const formData = new FormData();
-        formData.append("sessionId", sessionId);
-        formData.append("fileOffset", offset.toString());
-        formData.append("chunk", chunk);
-
-        const chunkRes = await fetch("/api/media/chunk", {
-          method: "POST",
-          body: formData,
-        });
-
-        const chunkData = await chunkRes.json();
-
-        if (!chunkRes.ok || !chunkData.success) {
-          setError(chunkData.error || `Chunk ${i + 1} upload failed`);
-          return;
-        }
-
-        if (chunkData.complete && chunkData.fileHandle) {
-          fileHandle = chunkData.fileHandle;
-          break;
-        }
-
-        offset += CHUNK_SIZE;
-      }
-
-      if (!fileHandle) {
-        setError("Upload complete but no file handle received");
-        return;
-      }
-
-      setUploadStatus("Upload termine !");
-      setUploadProgress(100);
-
-      // Add to uploaded files
-      const newMedia: UploadedMedia = {
-        id: crypto.randomUUID(),
-        mediaId: fileHandle,
-        fileName: file.name,
-        fileSize: file.size,
-        fileType: file.type,
-        mediaType: getMediaTypeFromMime(file.type),
-        uploadedAt: new Date(),
-      };
-      setUploadedFiles((prev) => [newMedia, ...prev]);
-
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur reseau");
-    } finally {
-      setUploading(false);
-      setUploadProgress(0);
-      setUploadStatus("");
-    }
-  }, []);
-
-  // Helper to get media type
-  const getMediaTypeFromMime = (mimeType: string): string => {
-    if (mimeType.startsWith("image/")) return "image";
-    if (mimeType.startsWith("video/")) return "video";
-    if (mimeType.startsWith("audio/")) return "audio";
-    return "document";
-  };
-
   const handleUpload = useCallback(async (file: File) => {
-    // For large files, use chunked upload via Resumable Upload API
+    // Vercel limit is 4.5MB
+    const VERCEL_LIMIT = 4.5 * 1024 * 1024;
     if (file.size > VERCEL_LIMIT) {
-      return handleChunkedUpload(file);
+      setError(
+        `Fichier trop volumineux (${formatFileSize(file.size)}). ` +
+        `Limite: 4.5 MB. Pour les gros fichiers, creez directement votre template ` +
+        `sur Meta Business Suite avec le media integre.`
+      );
+      return;
     }
 
-    // For small files, use direct upload
     setUploading(true);
     setError(null);
 
@@ -197,16 +97,10 @@ export function MediaPanel() {
         body: formData,
       });
 
-      // Handle non-JSON responses (like "Request Entity Too Large")
       const contentType = res.headers.get("content-type");
       if (!contentType || !contentType.includes("application/json")) {
         const text = await res.text();
-        if (text.includes("Request Entity Too Large") || text.includes("413") || text.includes("FUNCTION_PAYLOAD_TOO_LARGE")) {
-          // Fallback to chunked upload
-          return handleChunkedUpload(file);
-        } else {
-          setError(`Erreur serveur: ${text.slice(0, 100)}`);
-        }
+        setError(`Erreur serveur: ${text.slice(0, 100)}`);
         return;
       }
 
@@ -231,7 +125,7 @@ export function MediaPanel() {
     } finally {
       setUploading(false);
     }
-  }, [handleChunkedUpload]);
+  }, []);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -265,7 +159,6 @@ export function MediaPanel() {
       if (file) {
         handleUpload(file);
       }
-      // Reset input
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -279,7 +172,6 @@ export function MediaPanel() {
       setCopiedId(mediaId);
       setTimeout(() => setCopiedId(null), 2000);
     } catch {
-      // Fallback for older browsers
       const textArea = document.createElement("textarea");
       textArea.value = mediaId;
       document.body.appendChild(textArea);
@@ -302,8 +194,8 @@ export function MediaPanel() {
         <CardHeader>
           <CardTitle>Upload de media</CardTitle>
           <CardDescription>
-            Uploadez des fichiers vers WhatsApp pour obtenir leur Media ID.
-            Les Media IDs expirent apres 30 jours.
+            Uploadez des fichiers vers WhatsApp pour obtenir leur Media ID (max 4.5 MB).
+            Pour les fichiers plus gros, creez le template directement sur Meta Business Suite.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -329,15 +221,9 @@ export function MediaPanel() {
             />
 
             {uploading ? (
-              <div className="flex flex-col items-center gap-3 w-full max-w-xs">
+              <div className="flex flex-col items-center gap-3">
                 <Loader2 className="h-10 w-10 animate-spin text-primary" />
-                <p className="text-sm text-muted-foreground">{uploadStatus || "Upload en cours..."}</p>
-                {uploadProgress > 0 && (
-                  <div className="w-full space-y-1">
-                    <Progress value={uploadProgress} className="h-2" />
-                    <p className="text-xs text-center text-muted-foreground">{uploadProgress}%</p>
-                  </div>
-                )}
+                <p className="text-sm text-muted-foreground">Upload en cours...</p>
               </div>
             ) : (
               <>
@@ -349,10 +235,7 @@ export function MediaPanel() {
                     Glissez un fichier ici ou cliquez pour selectionner
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Images (JPEG, PNG, WebP) - Videos (MP4, 3GPP) - Audio (AAC, MP3, OGG) - Documents (PDF, Word, Excel)
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Jusqu'a 100 MB (gros fichiers via upload chunked)
+                    Images, Videos, Audio, Documents - Max 4.5 MB
                   </p>
                 </div>
               </>
@@ -468,22 +351,22 @@ export function MediaPanel() {
       {/* Info card */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Comment utiliser les Media IDs ?</CardTitle>
+          <CardTitle className="text-base">Pour les gros fichiers (&gt;4.5 MB)</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm text-muted-foreground">
           <p>
-            <strong className="text-foreground">1.</strong> Uploadez votre fichier ci-dessus pour obtenir un Media ID.
+            Creez directement votre template avec le media sur <strong className="text-foreground">Meta Business Suite</strong> :
           </p>
-          <p>
-            <strong className="text-foreground">2.</strong> Copiez le Media ID (ex: <code className="rounded bg-secondary px-1 py-0.5 text-xs font-mono">123456789012345</code>).
-          </p>
-          <p>
-            <strong className="text-foreground">3.</strong> Utilisez-le dans vos templates WhatsApp avec header media, ou dans l'API pour envoyer des messages avec pieces jointes.
-          </p>
+          <ol className="list-decimal list-inside space-y-1 ml-2">
+            <li>Allez sur <code className="rounded bg-secondary px-1 py-0.5 text-xs">business.facebook.com</code></li>
+            <li>WhatsApp Manager → Outils de compte → Templates</li>
+            <li>Creez un template avec Header de type Media</li>
+            <li>Le media sera integre directement dans le template</li>
+          </ol>
           <Alert className="mt-4">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription className="text-sm">
-              Les Media IDs expirent apres <strong>30 jours</strong>. Pensez a re-uploader vos fichiers si necessaire.
+              Les Media IDs expirent apres <strong>30 jours</strong>. Les medias integres dans les templates n'expirent pas.
             </AlertDescription>
           </Alert>
         </CardContent>
