@@ -490,7 +490,7 @@ export function MediaPanel() {
                         <p className="text-sm font-medium text-foreground">
                           {template.name}
                         </p>
-                        <div className="mt-0.5 flex items-center gap-2">
+                        <div className="mt-0.5 flex items-center gap-2 flex-wrap">
                           <Badge 
                             variant="secondary" 
                             className={`text-xs ${
@@ -505,26 +505,24 @@ export function MediaPanel() {
                             {template.language} - {template.headerFormat}
                           </span>
                         </div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 max-w-[200px] sm:max-w-[300px]">
-                        <code className="text-xs font-mono text-foreground truncate">
-                          {template.headerHandle}
-                        </code>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 w-6 p-0 flex-shrink-0"
-                          onClick={() => copyToClipboard(template.headerHandle)}
-                        >
-                          {copiedId === template.headerHandle ? (
-                            <Check className="h-3.5 w-3.5 text-emerald-600" />
-                          ) : (
-                            <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-                          )}
-                        </Button>
+                        <div className="mt-1.5 flex items-center gap-1.5">
+                          <span className="text-xs text-muted-foreground">Media ID:</span>
+                          <code className="text-xs font-mono text-foreground bg-secondary px-1.5 py-0.5 rounded max-w-[300px] truncate">
+                            {template.headerHandle}
+                          </code>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-5 w-5 p-0 flex-shrink-0"
+                            onClick={() => copyToClipboard(template.headerHandle)}
+                          >
+                            {copiedId === template.headerHandle ? (
+                              <Check className="h-3 w-3 text-emerald-600" />
+                            ) : (
+                              <Copy className="h-3 w-3 text-muted-foreground" />
+                            )}
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   </div>
