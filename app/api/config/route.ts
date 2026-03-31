@@ -50,6 +50,7 @@ export async function PUT(request: NextRequest) {
     'whatsapp_access_token',
     'whatsapp_verify_token',
     'whatsapp_business_account_id',
+    'meta_app_id',
     'chatbase_chatbot_id',
     'chatbase_api_key',
     'send_mode',

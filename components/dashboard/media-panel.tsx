@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Progress } from "@/components/ui/progress";
 import {
   Upload,
   FileImage,
@@ -67,24 +68,123 @@ function getMediaColor(mediaType: string) {
 
 export function MediaPanel() {
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [uploadStatus, setUploadStatus] = useState<string>("");
   const [uploadedFiles, setUploadedFiles] = useState<UploadedMedia[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB chunks (under Vercel limit)
+  const VERCEL_LIMIT = 4.5 * 1024 * 1024; // 4.5MB
+
+  // Chunked upload for large files
+  const handleChunkedUpload = useCallback(async (file: File) => {
+    setUploading(true);
+    setError(null);
+    setUploadProgress(0);
+    setUploadStatus("Creation de la session d'upload...");
+
+    try {
+      // Step 1: Create upload session
+      const sessionRes = await fetch("/api/media/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: file.type,
+        }),
+      });
+
+      const sessionData = await sessionRes.json();
+
+      if (!sessionRes.ok || !sessionData.success) {
+        setError(sessionData.error || "Failed to create upload session");
+        return;
+      }
+
+      const { sessionId } = sessionData;
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      let offset = 0;
+      let fileHandle = null;
+
+      // Step 2: Upload chunks
+      for (let i = 0; i < totalChunks; i++) {
+        const chunk = file.slice(offset, offset + CHUNK_SIZE);
+        setUploadStatus(`Upload chunk ${i + 1}/${totalChunks}...`);
+        setUploadProgress(Math.round(((i + 1) / totalChunks) * 100));
+
+        const formData = new FormData();
+        formData.append("sessionId", sessionId);
+        formData.append("fileOffset", offset.toString());
+        formData.append("chunk", chunk);
+
+        const chunkRes = await fetch("/api/media/chunk", {
+          method: "POST",
+          body: formData,
+        });
+
+        const chunkData = await chunkRes.json();
+
+        if (!chunkRes.ok || !chunkData.success) {
+          setError(chunkData.error || `Chunk ${i + 1} upload failed`);
+          return;
+        }
+
+        if (chunkData.complete && chunkData.fileHandle) {
+          fileHandle = chunkData.fileHandle;
+          break;
+        }
+
+        offset += CHUNK_SIZE;
+      }
+
+      if (!fileHandle) {
+        setError("Upload complete but no file handle received");
+        return;
+      }
+
+      setUploadStatus("Upload termine !");
+      setUploadProgress(100);
+
+      // Add to uploaded files
+      const newMedia: UploadedMedia = {
+        id: crypto.randomUUID(),
+        mediaId: fileHandle,
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type,
+        mediaType: getMediaTypeFromMime(file.type),
+        uploadedAt: new Date(),
+      };
+      setUploadedFiles((prev) => [newMedia, ...prev]);
+
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur reseau");
+    } finally {
+      setUploading(false);
+      setUploadProgress(0);
+      setUploadStatus("");
+    }
+  }, []);
+
+  // Helper to get media type
+  const getMediaTypeFromMime = (mimeType: string): string => {
+    if (mimeType.startsWith("image/")) return "image";
+    if (mimeType.startsWith("video/")) return "video";
+    if (mimeType.startsWith("audio/")) return "audio";
+    return "document";
+  };
+
   const handleUpload = useCallback(async (file: File) => {
-    // Vercel serverless has a 4.5MB body size limit - no way around it without Blob storage
-    const VERCEL_LIMIT = 4.5 * 1024 * 1024; // 4.5MB
+    // For large files, use chunked upload via Resumable Upload API
     if (file.size > VERCEL_LIMIT) {
-      setError(
-        `Fichier trop volumineux (${formatFileSize(file.size)}). ` +
-        `Limite serveur: 4.5 MB. Pour les fichiers plus gros, uploadez directement sur ` +
-        `Meta Business Suite: business.facebook.com → WhatsApp Manager → Outils → Media.`
-      );
-      return;
+      return handleChunkedUpload(file);
     }
 
+    // For small files, use direct upload
     setUploading(true);
     setError(null);
 
@@ -102,10 +202,8 @@ export function MediaPanel() {
       if (!contentType || !contentType.includes("application/json")) {
         const text = await res.text();
         if (text.includes("Request Entity Too Large") || text.includes("413") || text.includes("FUNCTION_PAYLOAD_TOO_LARGE")) {
-          setError(
-            "Fichier trop volumineux pour le serveur (limite 4.5 MB). " +
-            "Pour les gros fichiers: business.facebook.com → WhatsApp Manager → Outils → Media."
-          );
+          // Fallback to chunked upload
+          return handleChunkedUpload(file);
         } else {
           setError(`Erreur serveur: ${text.slice(0, 100)}`);
         }
@@ -133,7 +231,7 @@ export function MediaPanel() {
     } finally {
       setUploading(false);
     }
-  }, []);
+  }, [handleChunkedUpload]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -231,10 +329,16 @@ export function MediaPanel() {
             />
 
             {uploading ? (
-              <>
+              <div className="flex flex-col items-center gap-3 w-full max-w-xs">
                 <Loader2 className="h-10 w-10 animate-spin text-primary" />
-                <p className="text-sm text-muted-foreground">Upload en cours...</p>
-              </>
+                <p className="text-sm text-muted-foreground">{uploadStatus || "Upload en cours..."}</p>
+                {uploadProgress > 0 && (
+                  <div className="w-full space-y-1">
+                    <Progress value={uploadProgress} className="h-2" />
+                    <p className="text-xs text-center text-muted-foreground">{uploadProgress}%</p>
+                  </div>
+                )}
+              </div>
             ) : (
               <>
                 <div className="flex h-14 w-14 items-center justify-center rounded-full bg-secondary">
@@ -248,7 +352,7 @@ export function MediaPanel() {
                     Images (JPEG, PNG, WebP) - Videos (MP4, 3GPP) - Audio (AAC, MP3, OGG) - Documents (PDF, Word, Excel)
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Max 4.5 MB (limite Vercel)
+                    Jusqu'a 100 MB (gros fichiers via upload chunked)
                   </p>
                 </div>
               </>

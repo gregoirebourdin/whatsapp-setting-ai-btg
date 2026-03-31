@@ -183,6 +183,35 @@ export function ConfigPanel() {
           </div>
 
           <div className="space-y-2">
+            <Label htmlFor="meta_app_id">Meta App ID</Label>
+            <p className="text-xs text-muted-foreground">
+              Requis pour upload gros fichiers media. Trouvable dans developers.facebook.com &gt; My Apps &gt; App ID.
+            </p>
+            <div className="flex gap-2">
+              <Input
+                id="meta_app_id"
+                value={localValues.meta_app_id || ""}
+                onChange={(e) => setLocalValues(prev => ({ ...prev, meta_app_id: e.target.value }))}
+                placeholder="Ex: 123456789012345"
+              />
+              <Button
+                onClick={() => saveConfig("meta_app_id", localValues.meta_app_id || "")}
+                disabled={saving === "meta_app_id"}
+                size="icon"
+                variant="outline"
+              >
+                {saving === "meta_app_id" ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : success === "meta_app_id" ? (
+                  <Check className="h-4 w-4 text-green-600" />
+                ) : (
+                  <Check className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+          </div>
+
+          <div className="space-y-2">
             <Label htmlFor="verify_token">Webhook Verify Token</Label>
             <div className="flex gap-2">
               <Input
