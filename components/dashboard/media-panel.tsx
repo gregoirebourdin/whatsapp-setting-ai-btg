@@ -74,10 +74,14 @@ export function MediaPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleUpload = useCallback(async (file: File) => {
-    // Client-side validation first
-    const MAX_SIZE = 100 * 1024 * 1024; // 100MB
-    if (file.size > MAX_SIZE) {
-      setError(`Fichier trop volumineux (${formatFileSize(file.size)}). Maximum 100 MB.`);
+    // Vercel serverless has a 4.5MB body size limit - no way around it without Blob storage
+    const VERCEL_LIMIT = 4.5 * 1024 * 1024; // 4.5MB
+    if (file.size > VERCEL_LIMIT) {
+      setError(
+        `Fichier trop volumineux (${formatFileSize(file.size)}). ` +
+        `Limite serveur: 4.5 MB. Pour les fichiers plus gros, uploadez directement sur ` +
+        `Meta Business Suite: business.facebook.com → WhatsApp Manager → Outils → Media.`
+      );
       return;
     }
 
@@ -97,8 +101,11 @@ export function MediaPanel() {
       const contentType = res.headers.get("content-type");
       if (!contentType || !contentType.includes("application/json")) {
         const text = await res.text();
-        if (text.includes("Request Entity Too Large") || text.includes("413")) {
-          setError("Fichier trop volumineux pour le serveur. Essayez un fichier plus petit (< 50 MB).");
+        if (text.includes("Request Entity Too Large") || text.includes("413") || text.includes("FUNCTION_PAYLOAD_TOO_LARGE")) {
+          setError(
+            "Fichier trop volumineux pour le serveur (limite 4.5 MB). " +
+            "Pour les gros fichiers: business.facebook.com → WhatsApp Manager → Outils → Media."
+          );
         } else {
           setError(`Erreur serveur: ${text.slice(0, 100)}`);
         }
@@ -241,7 +248,7 @@ export function MediaPanel() {
                     Images (JPEG, PNG, WebP) - Videos (MP4, 3GPP) - Audio (AAC, MP3, OGG) - Documents (PDF, Word, Excel)
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Max 100 MB
+                    Max 4.5 MB (limite Vercel)
                   </p>
                 </div>
               </>
