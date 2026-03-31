@@ -8,6 +8,7 @@ import { JobsPanel } from "@/components/dashboard/jobs-panel";
 import { LogsPanel } from "@/components/dashboard/logs-panel";
 import { StatusIndicator } from "@/components/dashboard/status-indicator";
 import { CrmPanel } from "@/components/crm/crm-panel";
+import { MediaPanel } from "@/components/dashboard/media-panel";
 import { AuthGate } from "@/components/auth-gate";
 
 export default function Dashboard() {
@@ -34,8 +35,9 @@ export default function Dashboard() {
 
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-5 lg:w-auto lg:inline-flex">
+          <TabsList className="grid w-full grid-cols-6 lg:w-auto lg:inline-flex">
             <TabsTrigger value="crm">CRM</TabsTrigger>
+            <TabsTrigger value="media">Media</TabsTrigger>
             <TabsTrigger value="config">Configuration</TabsTrigger>
             <TabsTrigger value="conversations">Conversations</TabsTrigger>
             <TabsTrigger value="jobs">Jobs</TabsTrigger>
@@ -44,6 +46,10 @@ export default function Dashboard() {
 
           <TabsContent value="crm" className="space-y-4">
             <CrmPanel />
+          </TabsContent>
+
+          <TabsContent value="media" className="space-y-4">
+            <MediaPanel />
           </TabsContent>
 
           <TabsContent value="config" className="space-y-4">
