@@ -1,6 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 
+// Increase body size limit for media uploads (100MB)
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+// For App Router, we need to export this
+export const runtime = 'nodejs';
+export const maxDuration = 60; // 60 seconds timeout for large uploads
+
 const WHATSAPP_API_VERSION = 'v18.0';
 
 async function getConfig(key: string): Promise<string | null> {

@@ -74,6 +74,13 @@ export function MediaPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleUpload = useCallback(async (file: File) => {
+    // Client-side validation first
+    const MAX_SIZE = 100 * 1024 * 1024; // 100MB
+    if (file.size > MAX_SIZE) {
+      setError(`Fichier trop volumineux (${formatFileSize(file.size)}). Maximum 100 MB.`);
+      return;
+    }
+
     setUploading(true);
     setError(null);
 
@@ -85,6 +92,18 @@ export function MediaPanel() {
         method: "POST",
         body: formData,
       });
+
+      // Handle non-JSON responses (like "Request Entity Too Large")
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        const text = await res.text();
+        if (text.includes("Request Entity Too Large") || text.includes("413")) {
+          setError("Fichier trop volumineux pour le serveur. Essayez un fichier plus petit (< 50 MB).");
+        } else {
+          setError(`Erreur serveur: ${text.slice(0, 100)}`);
+        }
+        return;
+      }
 
       const data = await res.json();
 
